@@ -22,6 +22,7 @@ matlab/
 ├── demo_aas_monte_carlo_eirp.m        end-to-end example
 ├── demo_export_eirp_percentile_table.m demo for the percentile-table CSV
 ├── test_against_pycraf.m              optional pycraf cross-check via pyenv
+├── test_against_pycraf_strict.m       strict pycraf equivalence gate (3 fixed + 50 random beams)
 ├── test_aas_monte_carlo_eirp.m        MATLAB-only self tests
 ├── test_export_eirp_percentile_table.m self tests for the table exporter
 ├── test_ue_sector_sampler.m           self tests for the ue_sector beam sampler
@@ -130,6 +131,10 @@ test_aas_monte_carlo_eirp();
 % 2. Pycraf cross-check (if pyenv + pycraf available)
 test_against_pycraf();
 
+% 2b. Strict pycraf equivalence gate (3 fixed + 50 randomized beams,
+%     max abs error <= 1e-6 dB).
+test_against_pycraf_strict();
+
 % 3. Demo
 out = demo_aas_monte_carlo_eirp();
 ```
@@ -144,7 +149,7 @@ summary:
 run_all_tests
 ```
 
-`run_all_tests.m` adds `matlab/` to the path, runs the five test
+`run_all_tests.m` adds `matlab/` to the path, runs the six test
 functions below, and prints a single per-test summary line plus a final
 `pass / fail / skip / error` count. Skipped tests do not fail the suite.
 
@@ -243,6 +248,55 @@ If `pyenv`, Python, or pycraf is not available the test prints a clear
 `SKIP` message with the reason and does not fail the MATLAB-only test
 runs. Pycraf validation is **optional but recommended** for any change
 that touches the antenna math.
+
+### Strict pycraf equivalence gate
+
+`test_against_pycraf_strict` is the authoritative regression gate for
+the antenna math. It directly compares the MATLAB
+`imt2020_single_element_pattern.m` and `imt2020_composite_pattern.m`
+against `pycraf.antenna.imt2020_single_element_pattern` and
+`pycraf.antenna.imt2020_composite_pattern` on the spec input grid
+(`azim = -180:10:180`, `elev = -90:10:90`) with identical parameters
+(`G_Emax = 8`, `A_m = SLA_nu = 30`, `phi_3db = theta_3db = 65`,
+`d_H = d_V = 0.5`, `N_H = N_V = 8`, `rho = 1`, `k = 12`).
+
+Beam-pointing cases:
+
+| `azim_i`   | `elev_i`   |
+| ---------- | ---------- |
+| 0          |   0        |
+| 30         |  -5        |
+| -45        | -10        |
+| 50 random  | 50 random  |
+
+The 50 randomized cases are drawn from a fixed `RandStream` seed
+(`mt19937ar`, seed `20240501`) so the same beam directions are exercised
+on every run. `azim_i` is uniform in `[-180, 180]` deg and `elev_i` is
+uniform in `[-90, 90]` deg.
+
+**Pass rule:** `max abs error <= 1e-6 dB` across every (az, el) point and
+every beam-pointing case.
+
+Run it from MATLAB:
+
+```matlab
+addpath('matlab');
+test_against_pycraf_strict();          % standalone
+% or via the suite:
+run_all_tests
+```
+
+Like `test_against_pycraf`, the strict variant skips cleanly when
+`pyenv`, Python, or pycraf is unavailable - it prints a clear `SKIP`
+message with the reason and does not fail MATLAB-only test runs.
+
+> **Any change that touches the antenna math (single-element pattern,
+> composite array factor, angle conventions, `k` / `rho` handling) MUST
+> leave `test_against_pycraf_strict` passing.** Treat this as the
+> regression gate for pycraf parity. Do not merge changes to
+> `imt2020_single_element_pattern.m` or `imt2020_composite_pattern.m`
+> without rerunning this test in an environment where pycraf is
+> installed.
 
 ## Beam-pointing samplers
 
@@ -374,6 +428,13 @@ equations against pycraf 2.1 reproduces the result to within ~2.4e-12 dB
 across a 37x19 (az, el) grid. The test skips cleanly when Python or
 pycraf is unavailable. See the [Testing](#testing) section for the input
 grid, parameters, and beam-pointing cases that the test sweeps.
+
+`test_against_pycraf_strict.m` is the strict equivalence gate that
+covers the same single-element and composite-pattern checks plus 50
+additional randomized beam-pointing cases at a fixed `1e-6 dB`
+tolerance; see the
+[Strict pycraf equivalence gate](#strict-pycraf-equivalence-gate) section
+above. **Any change to the antenna math must keep this test passing.**
 
 ## Scaling and runtime
 
