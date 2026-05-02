@@ -326,6 +326,92 @@ eirpGridDbm = sectorEirpDbm + compositeGainDbi - max(compositeGainDbi(:))
 
 so `max(eirpGridDbm(:)) == sectorEirpDbm == 78.3 dBm / 100 MHz` exactly.
 
+## Reference validation for AAS cuts
+
+`examples/runAasReferenceValidation.m` is the AAS-03 reference-validation
+harness on top of the AAS-01 / AAS-02 cuts. It compares the
+MATLAB-generated horizontal and vertical EIRP pattern cuts against
+optional reference CSVs and reports bounded dB error metrics with a
+deterministic pass / fail gate. It does **not** model path loss,
+receiver geometry, or coordination - it is still *antenna-face EIRP
+only*.
+
+### How to run
+
+```matlab
+addpath('matlab');
+runAasReferenceValidation
+```
+
+(or `cd examples; runAasReferenceValidation`).
+
+### Where reference CSVs live
+
+```
+references/aas/r23_macro_horizontal_cut.csv   (optional)
+references/aas/r23_macro_vertical_cut.csv     (optional)
+```
+
+The CSV format is documented in `references/aas/README.md`. Required
+columns are `angle_deg` and `eirp_dbm_per_100mhz`; optional columns are
+`gain_dbi` and `notes`. Reference values can come from pycraf, ITU
+validation material, or frozen MATLAB-reviewed outputs. Bit-perfect
+parity is **not** the AAS-03 target - bounded dB error metrics are.
+
+### Skip behavior when references are absent
+
+If neither CSV is present, `runAasReferenceValidation` prints a clear
+"skipped" message and returns a summary with `summary.skipped = true`
+(without failing). The accompanying `test_imtAasReferenceComparison`
+test exercises this path so that MATLAB-only environments without any
+reference artifacts still pass `run_all_tests`.
+
+### Where artifacts are written
+
+When at least one reference CSV is present, all under
+`examples/output/`:
+
+| file | content |
+| ---- | ------- |
+| `aas_reference_validation_summary.csv`        | one row per cut: max / RMS / main-lobe error metrics, applied thresholds, pass/fail flag |
+| `aas_reference_horizontal_comparison.png`     | two-panel actual-vs-reference + error plot for the horizontal cut |
+| `aas_reference_vertical_comparison.png`       | two-panel actual-vs-reference + error plot for the vertical cut |
+
+### Pass / fail tolerances
+
+`imtAasComparePatternCut` defaults (overridable via opts):
+
+| field                       | default | meaning                                  |
+| --------------------------- | ------- | ---------------------------------------- |
+| `maxAbsErrorDb`             | `1.0`   | global max absolute error gate           |
+| `rmsErrorDb`                | `0.5`   | global RMS error gate                    |
+| `mainLobeMaxAbsErrorDb`     | `0.5`   | main-lobe max absolute error gate        |
+| `mainLobeWindowDeg`         | `20`    | main-lobe window centered on actual peak |
+| `ignoreBelowDbm`            | `-80`   | ignore points where actual & ref both below this floor |
+| `interpolateReference`      | `true`  | linearly interpolate ref onto actual grid|
+
+A comparison passes only when all three error gates are met. Failures
+are reported with explicit reasons in `cmp.failReasons` and printed by
+`runAasReferenceValidation`.
+
+### Files added in this slice
+
+| file | role |
+| ---- | ---- |
+| `matlab/imtAasLoadReferenceCutCsv.m`         | base-MATLAB CSV loader for reference pattern cuts |
+| `matlab/imtAasComparePatternCut.m`           | actual-vs-reference comparison + pass/fail gates |
+| `matlab/plotImtAasReferenceComparison.m`     | two-panel comparison plot (cuts + error) |
+| `examples/runAasReferenceValidation.m`       | end-to-end reference-validation driver |
+| `references/aas/README.md`                   | reference CSV format + angle conventions |
+| `matlab/test_imtAasReferenceComparison.m`    | self tests, wired into `run_all_tests` |
+
+### Scope (what this slice is NOT)
+
+Same scope envelope as AAS-01 / AAS-02. This slice is still **antenna-face
+EIRP only**: it does not add path loss, propagation, receiver I / N,
+CDF / CCDF aggregation, coordination distance, FS / FSS receiver
+geometry, or IMT / UE laydown.
+
 ## EMBRSS-style EIRP CDF-grid first step
 
 `run_embrss_eirp_cdf_grid(category, opts)` is the first step of an
