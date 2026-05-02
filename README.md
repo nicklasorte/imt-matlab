@@ -412,6 +412,115 @@ EIRP only**: it does not add path loss, propagation, receiver I / N,
 CDF / CCDF aggregation, coordination distance, FS / FSS receiver
 geometry, or IMT / UE laydown.
 
+## UE-driven beam angles for one AAS sector
+
+`examples/runAasBeamDrivenEirp.m` adds the minimal **UE-geometry layer**
+needed to generate physically consistent AAS beam steering angles for a
+**single base-station sector**. The pipeline is:
+
+```
+UE positions  ->  raw beam (az, el)  ->  clipped beam (az, el)  ->  EIRP grid
+                  imtAasUeToBeamAngles  imtAasApplyBeamLimits     imtAasEirpGrid
+```
+
+This layer is **not** a network laydown, **not** a multi-site cluster,
+and **not** a received-power model. It only answers: *given UE positions
+around one sector, what AAS beam steering angles should be used?*
+
+### How to run
+
+```matlab
+addpath('matlab');
+runAasBeamDrivenEirp
+```
+
+(or `cd examples; runAasBeamDrivenEirp`).
+
+The driver prints the number of beams, min / max raw and clipped
+steering angles, and how many beams were clipped in azimuth / elevation.
+For three representative beams (boresight, sector edge, and a clipped
+or closest UE) it computes the per-(az, el) EIRP grid via
+`imtAasEirpGrid` and reports the peak EIRP. With the R23 reference
+parameters the peak is `78.3 dBm / 100 MHz` for every beam, including
+the clipped ones.
+
+### Reference deployment defaults
+
+`imtAasSingleSectorParams(deployment)` returns the per-deployment
+geometry envelope:
+
+| deployment      | bsHeight_m | cellRadius_m | minUeDistance_m | sector |
+| --------------- | ---------- | ------------ | --------------- | ------ |
+| `macroUrban`    | 18         | 400          | 35              | +/-60 deg |
+| `macroSuburban` | 20         | 800          | 35              | +/-60 deg |
+
+UE height defaults to `1.5 m` and the BS sits at the origin with a
+sector boresight of `0 deg` azimuth.
+
+### Angle convention
+
+* `steerAzDeg` is **relative to sector boresight**. `steerAzDeg = 0`
+  points along boresight; positive is to the left of the boresight in
+  the sector frame, matching the rest of the repo.
+* `steerElDeg` is **relative to the horizon** (0 deg = horizon).
+  **Negative elevation = downtilt** (UE below the BS antenna).
+* The raw fields `rawSteerAzDeg` and `rawSteerElDeg` always carry the
+  un-clamped pointing angles so callers can distinguish a beam that
+  *fits* the steering envelope from one that *was clipped* via
+  `wasAzClipped` / `wasElClipped`.
+
+### R23 steering envelope (clipping)
+
+`imtAasApplyBeamLimits` clamps raw steering angles to the R23 envelope:
+
+| axis      | limit      |
+| --------- | ---------- |
+| azimuth   | `[-60, 60]` deg |
+| elevation | `[-10, 0]` deg  |
+
+The vertical limit reflects the R23 vertical coverage of 90-100 deg in
+the M.2101 global-theta convention, which maps to elevation
+`[-10, 0]` in this repo's `(az, el)` convention.
+
+### Sampling rules
+
+`imtAasSampleUePositions` draws UE positions inside one sector with:
+
+* **azimuth uniform** in `sector.azLimitsDeg` (default `+/-60 deg`).
+* **radial uniform-in-area** so 2-D UE density is uniform on the
+  annulus:
+
+  ```
+  r = sqrt(r_min^2 + u * (r_max^2 - r_min^2)),  u ~ U(0, 1)
+  ```
+
+  with `r_min = 35 m` and `r_max = sector.cellRadius_m`.
+
+The sampler accepts an optional `seed` for deterministic draws, and
+saves / restores the global RNG state on entry / exit so it does not
+perturb a caller-managed Monte Carlo stream. Explicit `azRelDeg` /
+`r_m` / `ueHeight_m` overrides are also supported (and validated
+against the sector envelope).
+
+### Files added in this slice
+
+| file | role |
+| ---- | ---- |
+| `matlab/imtAasSingleSectorParams.m`     | per-deployment geometry + steering limits |
+| `matlab/imtAasSampleUePositions.m`      | uniform-in-area UE sampler with explicit overrides |
+| `matlab/imtAasUeToBeamAngles.m`         | UE position -> raw beam (az, el) |
+| `matlab/imtAasApplyBeamLimits.m`        | clamp raw angles to sector / R23 limits |
+| `matlab/imtAasGenerateBeamSet.m`        | one-shot wrapper: sample -> raw -> clipped |
+| `examples/runAasBeamDrivenEirp.m`       | end-to-end histogram + EIRP-grid demo |
+| `matlab/test_imtAasBeamAngles.m`        | self tests, wired into `run_all_tests` |
+
+### Scope (what this slice is NOT)
+
+This is geometry only. There is no path loss, no propagation, no
+receiver, no I / N, no CDF / CCDF aggregation, no multi-site / 19-site
+cluster, no IMT / UE scheduling, no FS / FSS receiver geometry, and no
+coordination-distance logic.
+
 ## EMBRSS-style EIRP CDF-grid first step
 
 `run_embrss_eirp_cdf_grid(category, opts)` is the first step of an
