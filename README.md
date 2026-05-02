@@ -17,9 +17,12 @@ matlab/
 ├── eirp_percentile_maps.m             per-angle percentile maps from histograms
 ├── eirp_cdf_at_angle.m                empirical CDF at one (az,el)
 ├── eirp_exceedance_maps.m             P(EIRP > threshold) maps
+├── export_eirp_percentile_table.m     one-row-per-(az,el) p000:p100 CSV export
 ├── demo_aas_monte_carlo_eirp.m        end-to-end example
+├── demo_export_eirp_percentile_table.m demo for the percentile-table CSV
 ├── test_against_pycraf.m              optional pycraf cross-check via pyenv
-└── test_aas_monte_carlo_eirp.m        MATLAB-only self tests
+├── test_aas_monte_carlo_eirp.m        MATLAB-only self tests
+└── test_export_eirp_percentile_table.m self tests for the table exporter
 ```
 
 ## What was ported from pycraf
@@ -125,6 +128,38 @@ test_against_pycraf();
 % 3. Demo
 out = demo_aas_monte_carlo_eirp();
 ```
+
+## Per-(az,el) EIRP percentile table
+
+`export_eirp_percentile_table(stats, csvPath)` collapses the streaming
+histogram into a flat table where each row is one (azimuth, elevation)
+observation bin and the columns `p000`, `p001`, ..., `p100` hold the EIRP
+in dBm at integer CDF percentiles 0..100.
+
+```
+azimuth_deg, elevation_deg, p000, p001, ..., p100
+```
+
+The CDF is the empirical distribution over Monte Carlo active-beam
+realizations at each fixed observation direction. Bin centers are used
+as the EIRP value for each percentile via the smallest histogram bin
+whose cumulative probability is at least `q/100`. By convention `p000`
+is the first nonzero occupied bin center and `p100` is the last nonzero
+occupied bin center, so the `p000:p100` columns are monotonically
+non-decreasing across each row. Cells with zero samples emit `NaN`
+across all percentile columns.
+
+For the default `azGrid = -180:1:180` and `elGrid = -90:1:90` the table
+has `361 * 181 = 65,341` rows and `2 + 101 = 103` columns.
+
+```matlab
+addpath('matlab');
+out = demo_export_eirp_percentile_table();   % writes eirp_percentile_table.csv
+```
+
+The exporter never reconstructs the raw EIRP sample cube; it operates
+directly on the streaming histogram (`stats.counts` /
+`stats.histCounts`).
 
 ## pycraf comparison mode
 
