@@ -16,11 +16,7 @@ function results = test_runR23AasEirpCdfGrid()
 %       T8.  out.metadata says 'R23 Extended AAS'.
 %       T9.  No output / metadata fields advertise path loss, receiver
 %            gain, or I / N.
-%       T10. run_embrss_eirp_cdf_grid('urban_macro') uses the R23 runner
-%            by default; opts.legacyM2101 = true falls back to legacy
-%            (or fails with a clear error).
-%       T11. Legacy mode is reachable and runs (or errors clearly).
-%       T12. Deterministic seed gives repeatable percentile maps.
+%       T10. Deterministic seed gives repeatable percentile maps.
 %
 %   Returns struct with .passed (logical) and .summary (cellstr).
 
@@ -36,8 +32,6 @@ function results = test_runR23AasEirpCdfGrid()
     results = t_three_beam_per_beam_peak(results);
     results = t_metadata_says_r23(results);
     results = t_no_path_loss_fields(results);
-    results = t_embrss_wrapper_uses_r23(results);
-    results = t_legacy_mode(results);
     results = t_seed_repeatable(results);
 
     fprintf('\n--- test_runR23AasEirpCdfGrid summary ---\n');
@@ -209,64 +203,7 @@ function r = t_no_path_loss_fields(r)
 end
 
 % =====================================================================
-% T10: embrss wrapper uses R23 by default
-% =====================================================================
-function r = t_embrss_wrapper_uses_r23(r)
-    opts = struct();
-    opts.numMc       = 5;
-    opts.azGrid      = -30:10:30;
-    opts.elGrid      = -10:5:10;
-    opts.binEdges    = -80:5:120;
-    opts.seed        = 21;
-    opts.numBeams    = 1;
-    opts.percentiles = [5 50 95];
-
-    out = run_embrss_eirp_cdf_grid('urban_macro', opts);
-    okPathway = isfield(out, 'pathway') && strcmp(out.pathway, 'r23');
-    okSector  = isfield(out, 'sector') && ...
-                strcmp(out.sector.deployment, 'macroUrban');
-    r = check(r, okPathway && okSector, ...
-        'T10: run_embrss_eirp_cdf_grid uses R23 runner by default');
-end
-
-% =====================================================================
-% T11: legacy mode reachable
-% =====================================================================
-function r = t_legacy_mode(r)
-    opts = struct();
-    opts.numMc       = 5;
-    opts.azGrid      = -30:10:30;
-    opts.elGrid      = -10:5:10;
-    opts.binEdges    = -80:5:120;
-    opts.seed        = 21;
-    opts.numBeams    = 1;
-    opts.percentiles = [5 50 95];
-    opts.legacyM2101 = true;
-
-    threwClearly = false;
-    okLegacy = false;
-    try
-        out = run_embrss_eirp_cdf_grid('urban_macro', opts);
-        okLegacy = isfield(out, 'pathway') && ...
-                   strcmp(out.pathway, 'legacy_m2101') && ...
-                   isfield(out, 'cfg') && isfield(out, 'model');
-    catch err
-        % An explicit, documented error is also acceptable per the
-        % task spec ("at least fails with a clear documented error").
-        if ~isempty(err.identifier)
-            ident = err.identifier;
-            threwClearly = startsWith(ident, 'run_embrss_eirp_cdf_grid:') || ...
-                           startsWith(ident, 'embrss_aas_config:') || ...
-                           startsWith(ident, 'embrss_category_model:') || ...
-                           startsWith(ident, 'run_imt_aas_eirp_monte_carlo:');
-        end
-    end
-    r = check(r, okLegacy || threwClearly, ...
-        'T11: legacy mode runs successfully or fails with a clear error');
-end
-
-% =====================================================================
-% T12: deterministic seed
+% T10: deterministic seed
 % =====================================================================
 function r = t_seed_repeatable(r)
     opts = smallOpts();
@@ -284,7 +221,7 @@ function r = t_seed_repeatable(r)
              ~isequaln(out1.stats.mean_dBm, out3.stats.mean_dBm);
 
     r = check(r, okEq && okDiff, ...
-        'T12: same seed -> identical maps; different seed -> different maps');
+        'T10: same seed -> identical maps; different seed -> different maps');
 end
 
 % =====================================================================
