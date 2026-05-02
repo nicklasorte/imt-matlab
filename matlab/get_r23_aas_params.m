@@ -22,6 +22,8 @@ function params = get_r23_aas_params()
 %       mechanical downtilt ................ 6 deg
 %       horizontal coverage ................ +/- 60 deg
 %       vertical coverage (global theta) ... 90..100 deg
+%           equivalently, internal elevation -10..0 deg
+%           conversion: thetaGlobalDeg = 90 - elevationDeg
 %       sector peak EIRP ................... 78.3 dBm / 100 MHz
 %       conducted BS power ................. 46.1 dBm / 100 MHz
 %       peak composite gain ................ 32.2 dBi

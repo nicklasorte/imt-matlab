@@ -776,7 +776,36 @@ What it explicitly **does NOT** implement (out of scope for this MVP):
 * multi-site / 19-site aggregation, IMT-IMT aggregation
 * full SSB / CSI-RS / PMI beam acquisition (UE-driven steering only)
 
-There are no EMBRSS references anywhere in this MVP.
+### Vertical convention (internal elevation vs. R23 global theta)
+
+The MVP carries two equivalent vertical-angle representations side by
+side. Neither is silently substituted for the other; the conversion is
+exposed in code (and tested in `test_single_sector_eirp_mvp`):
+
+* **internal elevation** (used by every existing antenna call):
+  `elevationDeg`, range `[-90, 90]`, `0 deg = horizon`,
+  **negative = downtilt** (below the horizon). The R23 nominal beam at
+  -9 deg elevation sits below the horizon, as expected.
+* **R23 global theta** (M.2101 / WP5D vertical convention):
+  `thetaGlobalDeg`, range `[0, 180]`, `90 deg = horizon`,
+  `100 deg = 10 deg below horizon`.
+* **conversion** (one-line, exact):
+  `thetaGlobalDeg = 90 - elevationDeg`.
+
+Both forms appear on the beam structs returned by the MVP:
+
+| internal field   | R23 global-theta field   | source                           |
+| ---------------- | ------------------------ | -------------------------------- |
+| `rawElDeg`       | `rawThetaGlobalDeg`      | `compute_beam_angles_bs_to_ue`   |
+| `steerElDeg`     | `steerThetaGlobalDeg`    | `clamp_beam_to_r23_coverage`     |
+| `elLimitsDeg`    | `thetaGlobalLimitsDeg`   | `clamp_beam_to_r23_coverage` / layout |
+
+The R23 source vertical coverage envelope is `thetaGlobal ∈ [90, 100]`
+deg, equivalent to `elevation ∈ [-10, 0]` deg. Both forms are exposed on
+the layout struct via `elLimitsDeg = [-10, 0]` and
+`verticalCoverageGlobalThetaDeg = [90, 100]`. The MVP remains one site,
+one sector, three UEs, and continues to exclude path loss, clutter, FS /
+FSS modeling, interference aggregation, and network laydown.
 
 ### Default base-station input (override-friendly)
 

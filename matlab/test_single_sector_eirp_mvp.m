@@ -36,6 +36,18 @@ function results = test_single_sector_eirp_mvp()
 %            peak EIRP by exactly 8.3 dB.
 %       S13. End-to-end run_single_sector_eirp_demo runs and produces
 %            a non-empty cdfOut.percentileEirpDbm.
+%       S14. Vertical-convention contract:
+%            (a) layout exposes both elLimitsDeg = [-10, 0] and
+%                verticalCoverageGlobalThetaDeg = [90, 100] consistently
+%                via theta = 90 - elev.
+%            (b) UE at the same height as the BS yields rawElDeg ~ 0 and
+%                rawThetaGlobalDeg ~ 90 (horizon).
+%            (c) A direction with rawElDeg = -10 corresponds to
+%                rawThetaGlobalDeg = 100 (10 deg below horizon).
+%            (d) Clamp: rawElDeg = +5 -> steerElDeg = 0 and
+%                steerThetaGlobalDeg = 90; rawElDeg = -20 ->
+%                steerElDeg = -10 and steerThetaGlobalDeg = 100.
+%            (e) thetaGlobalLimitsDeg = [90, 100] on the clamp output.
 
     results.summary = {};
     results.passed  = true;
@@ -53,6 +65,7 @@ function results = test_single_sector_eirp_mvp()
     results = s11_bs_height_override(results);
     results = s12_bs_eirp_override(results);
     results = s13_demo_runs(results);
+    results = s14_global_theta_convention(results);
 
     fprintf('\n--- test_single_sector_eirp_mvp summary ---\n');
     for k = 1:numel(results.summary)
@@ -178,8 +191,12 @@ function r = s5_beam_angles(r)
     okEl = abs(beam.rawElDeg - expectedEl) < 1e-9;
     okGround = abs(beam.groundRange_m - hypot(200, 50)) < 1e-9;
     okBelow  = beam.rawElDeg < 0;
-    r = check(r, okAz && okEl && okGround && okBelow, ...
-        'S5: BS->UE raw beam angles match analytic atan2d / negative elev for default heights');
+    okThetaField = isfield(beam, 'rawThetaGlobalDeg');
+    okThetaConv  = okThetaField && ...
+                   abs(beam.rawThetaGlobalDeg - (90 - beam.rawElDeg)) < 1e-12;
+    r = check(r, okAz && okEl && okGround && okBelow && ...
+                 okThetaField && okThetaConv, ...
+        'S5: BS->UE raw beam angles match analytic atan2d / negative elev / rawThetaGlobalDeg = 90 - rawElDeg');
 end
 
 % =====================================================================
@@ -198,8 +215,15 @@ function r = s6_clamp_beam(r)
     okEl = isequal(out.steerElDeg, [-5; 0; -3]) && ...
            isequal(out.wasElClipped, [false; true; false]);
 
-    r = check(r, okAz && okEl, ...
-        'S6: clamp_beam_to_r23_coverage clips to +/- 60 deg az and [-10, 0] deg el');
+    okThetaField = isfield(out, 'steerThetaGlobalDeg') && ...
+                   isfield(out, 'thetaGlobalLimitsDeg');
+    okThetaConv  = okThetaField && ...
+                   isequal(out.steerThetaGlobalDeg, 90 - out.steerElDeg);
+    okThetaLim   = okThetaField && ...
+                   isequal(out.thetaGlobalLimitsDeg, [90, 100]);
+
+    r = check(r, okAz && okEl && okThetaField && okThetaConv && okThetaLim, ...
+        'S6: clamp_beam_to_r23_coverage clips az/el and exposes steerThetaGlobalDeg / thetaGlobalLimitsDeg');
 end
 
 % =====================================================================
@@ -383,6 +407,80 @@ function r = s13_demo_runs(r)
     okShape  = okFields && all(size(out.cdfOut.percentileEirpDbm) > 0);
     r = check(r, okFields && okShape, ...
         'S13: run_single_sector_eirp_demo runs end-to-end and produces CDF maps');
+end
+
+% =====================================================================
+function r = s14_global_theta_convention(r)
+%S14 Vertical-convention contract: internal elevation <-> R23 global theta.
+%
+%   The MVP uses internal elevation (0 deg = horizon, negative = downtilt)
+%   for every existing antenna call, and exposes the R23 global-theta
+%   representation (90 deg = horizon, 100 deg = 10 deg below horizon)
+%   side by side. The conversion is one-line and exact:
+%       thetaGlobalDeg = 90 - elevationDeg
+%   This test pins that contract so future changes cannot silently swap
+%   one convention for the other or drop one of the two representations.
+
+    bs = get_default_bs();
+    p  = get_r23_aas_params();
+    layout = generate_single_sector_layout(bs, p);
+
+    % --- (a) layout exposes both forms consistently ---------------------
+    okElLim = isequal(layout.elLimitsDeg, [-10, 0]);
+    okThetaLim = isfield(layout, 'verticalCoverageGlobalThetaDeg') && ...
+                 isequal(layout.verticalCoverageGlobalThetaDeg, [90, 100]);
+    % conversion: theta limits = 90 - flip(elev limits) (monotonic dec.).
+    okConv = okThetaLim && isequal(layout.verticalCoverageGlobalThetaDeg, ...
+                                   [90 - layout.elLimitsDeg(2), ...
+                                    90 - layout.elLimitsDeg(1)]);
+
+    % --- (b) UE at BS height -> rawElDeg ~ 0, rawThetaGlobalDeg ~ 90 ----
+    ueH = struct();
+    ueH.x_m = 200; ueH.y_m = 0; ueH.z_m = layout.bsHeight_m;
+    ueH.r_m = 200;
+    ueH.azRelDeg = 0; ueH.azGlobalDeg = 0;
+    ueH.height_m = ueH.z_m;
+    ueH.N = 1;
+    ueH.layout = layout;
+    bH = compute_beam_angles_bs_to_ue(bs, ueH, p);
+    okHorizonEl    = abs(bH.rawElDeg)               < 1e-9;
+    okHorizonTheta = abs(bH.rawThetaGlobalDeg - 90) < 1e-9;
+
+    % --- (c) rawElDeg = -10 <-> rawThetaGlobalDeg = 100 -----------------
+    % Drive this geometrically: pick a UE 10 deg below the horizon.
+    range = 200;
+    dz = -range * tand(10);   % negative dz -> downtilt 10 deg
+    ueD = ueH;
+    ueD.z_m = layout.bsHeight_m + dz;
+    ueD.height_m = ueD.z_m;
+    bD = compute_beam_angles_bs_to_ue(bs, ueD, p);
+    okDownEl    = abs(bD.rawElDeg - (-10))           < 1e-9;
+    okDownTheta = abs(bD.rawThetaGlobalDeg - 100)    < 1e-9;
+
+    % --- (d) clamp: rawElDeg = +5 -> 0 / 90 ; -20 -> -10 / 100 ----------
+    beamsRaw = struct();
+    beamsRaw.rawAzDeg = [0; 0];
+    beamsRaw.rawElDeg = [5; -20];
+    beamsRaw.layout = layout;
+    cl = clamp_beam_to_r23_coverage(bs, beamsRaw, p);
+    okClipUpEl    = abs(cl.steerElDeg(1))           < 1e-12;
+    okClipUpTheta = abs(cl.steerThetaGlobalDeg(1) - 90)  < 1e-12;
+    okClipDnEl    = abs(cl.steerElDeg(2) - (-10))   < 1e-12;
+    okClipDnTheta = abs(cl.steerThetaGlobalDeg(2) - 100) < 1e-12;
+    okClipFlags   = isequal(cl.wasElClipped, [true; true]);
+
+    % --- (e) thetaGlobalLimitsDeg surfaced on the clamp output ----------
+    okClampLim = isequal(cl.thetaGlobalLimitsDeg, [90, 100]);
+
+    okAll = okElLim && okThetaLim && okConv && ...
+            okHorizonEl && okHorizonTheta && ...
+            okDownEl && okDownTheta && ...
+            okClipUpEl && okClipUpTheta && ...
+            okClipDnEl && okClipDnTheta && ...
+            okClipFlags && okClampLim;
+
+    r = check(r, okAll, ...
+        'S14: vertical convention - internal elev and R23 global theta agree via theta = 90 - elev (horizon, downtilt, clamp)');
 end
 
 % =====================================================================
