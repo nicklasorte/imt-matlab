@@ -229,6 +229,121 @@ grid only**. It does *not* implement:
 `imt_aas_bs_eirp(..., cfg)` (which dispatches on `cfg.patternModel`), and
 the streaming histogram update is unchanged.
 
+## EMBRSS-style EIRP CDF-grid first step
+
+`run_embrss_eirp_cdf_grid(category, opts)` is the first step of an
+EMBRSS recreation: a per-(az, el) **EIRP CDF-grid generator** for an IMT
+AAS base station, organised by deployment category. It is *only* the
+antenna / EIRP piece. It explicitly does **not** implement:
+
+* full Quadriga SSB acquisition / CSI-RS / PMI selection (the per-draw
+  beam pointing is a UE-driven sector approximation; SSB/PDSCH/PMI is a
+  follow-up PR)
+* free-space or terrain path loss, clutter loss, atmospheric loss
+* frequency-dependent rejection (FDR)
+* FS / FSS receiver antennas or boresight pointing
+* multi-site (e.g. 19-site) base-station aggregation
+* aggregate I / N
+* separation-distance search
+
+The wrapper resolves a category preset, builds an AAS config, drives
+`run_imt_aas_eirp_monte_carlo` with `beamSampler.mode = 'ue_sector'`,
+and collapses the streaming histograms into mean / percentile maps.
+
+### Categories
+
+`embrss_category_model(category)` returns geometric / UE-density
+defaults for one of:
+
+| `category`         | `bs_height_m` | `sector_radius_m` | `ue_height_range_m` |
+| ------------------ | ------------- | ----------------- | ------------------- |
+| `urban_macro`      | 20            | 400               | `[1.5  35]`         |
+| `suburban_macro`   | 25            | 800               | `[1.5  17]`         |
+| `rural_macro`      | 35            | 1600              | `[1.5   5]`         |
+
+All three categories use `sector_width_deg = 120`,
+`min_ue_range_m = 35`, and `num_ues_per_sector = 3`. Numeric fields can
+be overridden with name-value pairs.
+
+### Conducted power vs peak EIRP
+
+`embrss_aas_config(category, ...)` returns an antenna config compatible
+with `imt_aas_bs_eirp` / `run_imt_aas_eirp_monte_carlo`. Because
+
+```
+eirp_dBm = txPower_dBm + gain_dBi - feederLoss_dB
+```
+
+`txPower_dBm` is **conducted** power, not peak EIRP. To avoid
+double-counting antenna gain, the wrapper exposes two power modes:
+
+| `powerMode`     | meaning                                                                                   |
+| --------------- | ----------------------------------------------------------------------------------------- |
+| `'conducted'`   | `cfg.txPower_dBm` is taken at face value (default 20 dBm for safe demos).                  |
+| `'peak_eirp'`   | Caller passes `peakEirp_dBm` (and optionally `peakGain_dBi`); conducted power is back-computed so `txPower + peakGain - feederLoss = peakEirp`. |
+
+In `peak_eirp` mode, if `peakGain_dBi` is omitted it defaults to
+`G_Emax + 10*log10(N_H * N_V)` (the rho = 1 boresight gain of the
+composite pattern). Passing both `txPower_dBm` and `peakEirp_dBm`, or
+passing `peakEirp_dBm` while `powerMode = 'conducted'`, raises an error
+- the most common way to accidentally double-count antenna gain.
+
+### How to run
+
+```matlab
+addpath('matlab');
+
+% Quick demo: small grid, 200 MC draws, urban_macro
+out = demo_embrss_eirp_cdf_grid();
+
+% Full grid for a category, conducted power
+out = run_embrss_eirp_cdf_grid('urban_macro', struct( ...
+    'numMc',        1000,           ...
+    'azGrid',       -180:1:180,     ...
+    'elGrid',        -90:1:90,      ...
+    'binEdges',      -80:1:120,     ...
+    'seed',          1,             ...
+    'progressEvery', 100,           ...
+    'numBeams',      3));
+
+% EMBRSS-style high-power example: peak EIRP = 72 dBm at array boresight
+out = run_embrss_eirp_cdf_grid('urban_macro', struct( ...
+    'numMc',        1000,           ...
+    'powerMode',    'peak_eirp',    ...
+    'peakEirp_dBm', 72,             ...
+    'seed',         1));
+
+out.stats.counts        % Naz x Nel x Nbin uint32 histogram
+out.stats.mean_dBm      % Naz x Nel       linear-mW averaged mean EIRP
+out.percentileMaps      % struct from eirp_percentile_maps
+out.cfg                 % AAS cfg passed to imt_aas_bs_eirp
+out.metadata            % step + caveat string + ISO timestamp
+```
+
+The driver never reconstructs or returns a raw EIRP cube of shape
+`Naz x Nel x numMc`; it inherits the streaming aggregator from
+`run_imt_aas_eirp_monte_carlo`.
+
+If `opts.outputCsvPath` is non-empty the wrapper also writes the
+`p000:p100` per-(az, el) percentile table via
+`export_eirp_percentile_table`.
+
+### Modeling caveat
+
+This step is an **EMBRSS-style antenna / EIRP CDF-grid generator**, not a
+full Quadriga / CSI / PMI implementation. The per-iteration beam
+pointing is drawn by `sample_aas_beam_direction(..., 'ue_sector')`,
+which places a UE uniformly in the sector annulus and converts that UE
+to a beam direction. A later PR can replace the beam-state sampler with
+a true SSB / PDSCH / PMI model **without touching this driver**: the
+streaming histogram, percentile maps, and exporter all live below the
+beam sampler.
+
+The current default uses the existing repo M.2101 / pycraf-parity
+composite pattern (`cfg.patternModel = 'm2101'`). The R23 7/8 GHz
+extended sub-array variant is available via `cfg.patternModel =
+'r23_extended_aas'` but is not enabled by `embrss_aas_config` defaults.
+
 ## Angle conventions
 
 Matched to pycraf:
@@ -298,8 +413,8 @@ summary:
 run_all_tests
 ```
 
-`run_all_tests.m` adds `matlab/` to the path, runs the six test
-functions below, and prints a single per-test summary line plus a final
+`run_all_tests.m` adds `matlab/` to the path, runs the test functions
+below, and prints a single per-test summary line plus a final
 `pass / fail / skip / error` count. Skipped tests do not fail the suite.
 
 ### MATLAB-only tests
@@ -311,7 +426,29 @@ addpath('matlab');
 test_aas_monte_carlo_eirp();          % antenna sanity + Monte Carlo stats
 test_export_eirp_percentile_table();  % p000..p100 table exporter
 test_ue_sector_sampler();             % UE-driven sector beam sampler
+test_embrss_eirp_cdf_grid();          % EMBRSS first-step CDF-grid wrapper
 ```
+
+`test_embrss_eirp_cdf_grid` covers:
+
+* category presets (urban / suburban / rural macro) return the expected
+  BS heights, sector radii, and UE-height ranges; invalid category names
+  throw `embrss_category_model:badCategory`
+* `embrss_aas_config` `'conducted'` mode preserves `txPower_dBm` and the
+  end-to-end boresight EIRP equals `txPower + peakGain - feederLoss`
+* `embrss_aas_config` `'peak_eirp'` mode back-computes conducted power so
+  `txPower + peakGain - feederLoss = peakEirp_dBm` (no antenna-gain
+  double-count); supplying `peakEirp_dBm` while `powerMode='conducted'`
+  is rejected
+* `sample_aas_beam_direction` `ue_sector` mode draws UE heights uniformly
+  from `ue_height_range_m` (and reports them in `dbg.ueHeight_m`);
+  scalar `ue_height_m` mode still works
+* same-seed reruns produce identical `stats.counts` and `stats.mean_dBm`;
+  a different seed changes at least some counts or means
+* `stats.counts` sums to `numMc` at every `(az, el)` cell, percentile
+  maps are finite at populated cells and monotonic non-decreasing in
+  percentile, and the returned struct never carries a raw EIRP cube
+* the optional CSV export round-trips via `readtable`
 
 `test_ue_sector_sampler` covers:
 

@@ -28,6 +28,12 @@ function [azim_i, elev_i, dbg] = sample_aas_beam_direction(opts, rng_state)
 %                       opts.r_max_m           = 500
 %                       opts.bs_height_m       = 25
 %                       opts.ue_height_m       = 1.5
+%                       opts.ue_height_range_m = []  (optional)
+%                     If opts.ue_height_range_m is a non-empty 2-element
+%                     vector [hMin hMax], UE heights are drawn uniformly
+%                     in that range (per beam) and opts.ue_height_m is
+%                     ignored. Otherwise the scalar opts.ue_height_m is
+%                     used for all beams (backward compatible).
 %                     Optional distribution controls:
 %                       opts.radial_distribution = 'uniform_area' (default)
 %                                                | 'uniform_radius'
@@ -40,6 +46,7 @@ function [azim_i, elev_i, dbg] = sample_aas_beam_direction(opts, rng_state)
 %                       DBG.ueEl_deg   numBeams x 1 BS-to-UE elevation [deg]
 %                       DBG.ueX_m      numBeams x 1 UE x coordinate [m]
 %                       DBG.ueY_m      numBeams x 1 UE y coordinate [m]
+%                       DBG.ueHeight_m numBeams x 1 UE antenna AGL [m]
 %
 %   OPTS.numBeams (default 1): number of simultaneous beams to draw.
 %
@@ -93,7 +100,8 @@ function [azim_i, elev_i, dbg] = sample_aas_beam_direction(opts, rng_state)
             rMin     = getf(opts, 'r_min_m',          10);
             rMax     = getf(opts, 'r_max_m',          500);
             hBs      = getf(opts, 'bs_height_m',      25);
-            hUe      = getf(opts, 'ue_height_m',      1.5);
+            hUeScal  = getf(opts, 'ue_height_m',      1.5);
+            hUeRange = getf(opts, 'ue_height_range_m', []);
             radDist  = lower(getf(opts, 'radial_distribution', 'uniform_area'));
             azDist   = lower(getf(opts, 'az_distribution',     'uniform'));
             elClip   = getf(opts, 'elev_clip_deg',    [-90, 90]);
@@ -121,17 +129,31 @@ function [azim_i, elev_i, dbg] = sample_aas_beam_direction(opts, rng_state)
                         'Unknown radial_distribution "%s"', radDist);
             end
 
+            % UE height: optional uniform draw from a [hMin hMax] range,
+            % otherwise scalar opts.ue_height_m (backward compatible).
+            if ~isempty(hUeRange)
+                if numel(hUeRange) ~= 2 || hUeRange(2) < hUeRange(1)
+                    error('sample_aas_beam_direction:ue_sector:badHeightRange', ...
+                        ['ue_height_range_m must be [hMin hMax] with ' ...
+                         'hMax >= hMin.']);
+                end
+                hUe = hUeRange(1) + rand(n,1) .* (hUeRange(2) - hUeRange(1));
+            else
+                hUe = hUeScal .* ones(n,1);
+            end
+
             beamEl = atan2d(hUe - hBs, r);
             beamEl = max(min(beamEl, elClip(2)), elClip(1));
 
             azim_i = beamAz;
             elev_i = beamEl;
 
-            dbg.ueRange_m = r;
-            dbg.ueAz_deg  = beamAz;
-            dbg.ueEl_deg  = beamEl;
-            dbg.ueX_m     = r .* cosd(beamAz);
-            dbg.ueY_m     = r .* sind(beamAz);
+            dbg.ueRange_m  = r;
+            dbg.ueAz_deg   = beamAz;
+            dbg.ueEl_deg   = beamEl;
+            dbg.ueX_m      = r .* cosd(beamAz);
+            dbg.ueY_m      = r .* sind(beamAz);
+            dbg.ueHeight_m = hUe;
 
         otherwise
             error('sample_aas_beam_direction:badMode', ...
