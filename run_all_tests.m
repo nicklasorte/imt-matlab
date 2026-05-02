@@ -5,12 +5,13 @@ function results = run_all_tests()
 %
 %   Runs:
 %       test_against_pycraf
+%       test_against_pycraf_strict
 %       test_aas_monte_carlo_eirp
 %       test_export_eirp_percentile_table
 %       test_ue_sector_sampler
 %       test_runtime_scaling_controls
 %
-%   The pycraf comparison test skips cleanly (rather than failing) when
+%   The pycraf comparison tests skip cleanly (rather than failing) when
 %   Python or pycraf is not available; SKIPPED counts as PASS for the
 %   overall summary so that MATLAB-only environments still pass.
 %
@@ -32,6 +33,7 @@ function results = run_all_tests()
 
     tests = { ...
         'test_against_pycraf',               ...
+        'test_against_pycraf_strict',        ...
         'test_aas_monte_carlo_eirp',         ...
         'test_export_eirp_percentile_table', ...
         'test_ue_sector_sampler',            ...
