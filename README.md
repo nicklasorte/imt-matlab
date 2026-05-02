@@ -7,6 +7,7 @@ for per-direction EIRP statistics.
 ## Layout
 
 ```
+run_all_tests.m                        single entry point for the test suite
 matlab/
 ├── imt2020_single_element_pattern.m   single element gain (M.2101 Table 4)
 ├── imt2020_composite_pattern.m        composite array gain
@@ -129,6 +130,102 @@ test_against_pycraf();
 out = demo_aas_monte_carlo_eirp();
 ```
 
+## Testing
+
+There is one entry point that runs the full suite and prints a pass / fail
+summary:
+
+```matlab
+% from the repository root
+run_all_tests
+```
+
+`run_all_tests.m` adds `matlab/` to the path, runs the three test
+functions below, and prints a single per-test summary line plus a final
+`pass / fail / skip / error` count. Skipped tests do not fail the suite.
+
+### MATLAB-only tests
+
+These run with no Python dependency:
+
+```matlab
+addpath('matlab');
+test_aas_monte_carlo_eirp();          % antenna sanity + Monte Carlo stats
+test_export_eirp_percentile_table();  % p000..p100 table exporter
+```
+
+`test_aas_monte_carlo_eirp` covers:
+
+* single-element boresight equals `G_Emax`
+* single-element off-axis gain is lower than boresight
+* composite pattern returns finite values over an az/el grid
+* composite gain changes when beam pointing changes
+* `rho = 0` collapses the array contribution toward the single-element
+  pattern
+* `rho = 1` gives the full coherent composite result (boresight =
+  `G_Emax + 10*log10(N_H * N_V)`)
+* azimuth symmetry around boresight (`rho = 1`)
+* fixed-beam mode is repeatable across runs with the same seed
+* histogram counts sum to `numMc` at every `(az, el)` cell
+* the empirical CDF is monotonic non-decreasing at every populated cell
+* the final CDF value equals 1 at every populated cell
+* `mean_lin_mW` and `mean_dBm` reflect averaging in linear mW (not dBm),
+  cross-checked against an independent recomputation of the EIRP cube
+* per-percentile maps are monotonic non-decreasing in `p`
+* exceedance probability `P(EIRP > thr)` is non-increasing in threshold
+
+`test_export_eirp_percentile_table` covers:
+
+* default `azGrid = -180:1:180`, `elGrid = -90:1:90` produces a 65,341 x
+  103 table
+* the first two columns are `azimuth_deg` and `elevation_deg`
+* percentile columns are named `p000` through `p100` in order
+* per-row monotonicity of `p000:p100`
+* `p000` equals the minimum occupied EIRP bin center, `p100` equals the
+  maximum occupied EIRP bin center
+* cells with zero samples produce `NaN` across `p000:p100`
+* the function operates on the streaming histogram only (no raw EIRP
+  sample cube required)
+* CSV is written when `outputCsvPath` is provided
+* the function returns the table when `outputCsvPath` is omitted or
+  empty
+
+### Pycraf comparison test (optional)
+
+`test_against_pycraf` cross-checks the MATLAB single-element and
+composite patterns against pycraf, evaluated on the same input grid
+(`azim = -180:10:180`, `elev = -90:10:90`) with identical parameters
+(`G_Emax = 8`, `A_m = SLA_nu = 30`, `phi_3db = theta_3db = 65`,
+`d_H = d_V = 0.5`, `N_H = N_V = 8`, `rho = 1`, `k = 12`) and three
+beam-pointing cases:
+
+| `azim_i` | `elev_i` |
+| -------- | -------- |
+| 0        |   0      |
+| 30       |  -5      |
+| -45      | -10      |
+
+Each comparison prints max abs error and mean abs error in dB and passes
+when `max abs error <= 1e-6 dB`.
+
+Install pycraf if you want to run this comparison:
+
+```bash
+pip install pycraf
+```
+
+Then point MATLAB at the right Python interpreter (one-time):
+
+```matlab
+pyenv('Version', '/path/to/python')   % only if MATLAB hasn't picked it up
+test_against_pycraf();
+```
+
+If `pyenv`, Python, or pycraf is not available the test prints a clear
+`SKIP` message with the reason and does not fail the MATLAB-only test
+runs. Pycraf validation is **optional but recommended** for any change
+that touches the antenna math.
+
 ## Per-(az,el) EIRP percentile table
 
 `export_eirp_percentile_table(stats, csvPath)` collapses the streaming
@@ -164,8 +261,10 @@ directly on the streaming histogram (`stats.counts` /
 ## pycraf comparison mode
 
 `test_against_pycraf.m` uses MATLAB's `pyenv` to import `pycraf.antenna`
-and `astropy.units`, evaluates `imt2020_composite_pattern` on a small
-grid in both languages, and reports max / mean abs error. A reference run
-of the underlying equations against pycraf 2.1 reproduces the result to
-within ~2.4e-12 dB across a 37x19 (az, el) grid. The test skips cleanly
-when Python or pycraf is unavailable.
+and `astropy.units`, evaluates `imt2020_single_element_pattern` and
+`imt2020_composite_pattern` on the spec grid in both languages, and
+reports max / mean abs error per case. A reference run of the underlying
+equations against pycraf 2.1 reproduces the result to within ~2.4e-12 dB
+across a 37x19 (az, el) grid. The test skips cleanly when Python or
+pycraf is unavailable. See the [Testing](#testing) section for the input
+grid, parameters, and beam-pointing cases that the test sweeps.
