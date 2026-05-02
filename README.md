@@ -24,7 +24,10 @@ matlab/
 ├── test_against_pycraf.m              optional pycraf cross-check via pyenv
 ├── test_aas_monte_carlo_eirp.m        MATLAB-only self tests
 ├── test_export_eirp_percentile_table.m self tests for the table exporter
-└── test_ue_sector_sampler.m           self tests for the ue_sector beam sampler
+├── test_ue_sector_sampler.m           self tests for the ue_sector beam sampler
+├── estimate_aas_mc_memory.m           memory estimator for hist / pctile / CSV
+├── profile_aas_monte_carlo_runtime.m  runtime profiler + full-grid extrapolation
+└── test_runtime_scaling_controls.m    self tests for chunking / memory / progress
 ```
 
 ## What was ported from pycraf
@@ -141,7 +144,7 @@ summary:
 run_all_tests
 ```
 
-`run_all_tests.m` adds `matlab/` to the path, runs the four test
+`run_all_tests.m` adds `matlab/` to the path, runs the five test
 functions below, and prints a single per-test summary line plus a final
 `pass / fail / skip / error` count. Skipped tests do not fail the suite.
 
@@ -371,3 +374,169 @@ equations against pycraf 2.1 reproduces the result to within ~2.4e-12 dB
 across a 37x19 (az, el) grid. The test skips cleanly when Python or
 pycraf is unavailable. See the [Testing](#testing) section for the input
 grid, parameters, and beam-pointing cases that the test sweeps.
+
+## Scaling and runtime
+
+The full default observation grid is `azGrid = -180:1:180` and
+`elGrid = -90:1:90`, which is `361 * 181 = 65,341` az/el cells. Runtime
+scales roughly with
+
+```
+T  ~  numAz * numEl * numMc * N_H * N_V
+```
+
+(antenna evaluations dominate; the streaming histogram update scales with
+`numAz * numEl` per draw and is independent of `numMc` per call).
+
+### Storage strategy
+
+The Monte Carlo engine never materialises the per-draw `Naz x Nel x numMc`
+EIRP cube. Instead, `update_eirp_histograms` keeps a fixed-size streaming
+aggregator:
+
+* `stats.counts` ............. `Naz x Nel x Nbin uint32` histogram
+* `stats.sum_lin_mW` ......... `Naz x Nel double` running linear-mW sum
+* `stats.min_dBm`, `max_dBm` . `Naz x Nel double` running per-cell extrema
+
+For the full default grid with `binEdges = -50:1:120` (170 bins) the
+histogram is `~42 MiB`, the percentile table is `~52 MiB`, and the
+CSV is on the order of `~80 MiB`. A raw EIRP cube at `numMc = 1e4`
+would be `~5.2 GiB` for the same grid - prefer histogram storage.
+
+### Estimating memory before a run
+
+`estimate_aas_mc_memory(numAz, numEl, numBins[, countType[, opts]])` is a
+pure-arithmetic estimator. It never allocates the structures it sizes:
+
+```matlab
+addpath('matlab');
+out = estimate_aas_mc_memory(361, 181, 170, 'uint32', ...
+    struct('numMc', 1e4, 'verbose', true));
+```
+
+It returns:
+
+* `histCountsBytes`, `streamingSumsBytes`, `perCellExtrasBytes`,
+  `totalRunningBytes`
+* `percentileTableBytes`, `csvBytes`
+* `rawCubeBytesPerDraw`, `rawCubeBytesAtNumMc`, `rawCubeWarning`
+  (the warning fires when a hypothetical raw cube exceeds
+  `rawCubeWarnThresholdBytes`, default 1 GiB)
+* `summary` - a multi-line human-readable string
+
+When `opts.verbose = true` it also prints the summary.
+
+### Profiling runtime
+
+`profile_aas_monte_carlo_runtime` runs benchmark cases and extrapolates
+to the full grid. By default it runs:
+
+| case   | azGrid       | elGrid       | numMc |
+| ------ | ------------ | ------------ | ----- |
+| small  | `-30:5:30`   | `-20:5:10`   | 100   |
+| medium | `-90:2:90`   | `-30:2:10`   | 500   |
+
+It then estimates full-grid runtime at `numMc = 1e3`, `1e4`, `1e5` from
+the slowest measured per-cell-per-draw time. The full-grid case is a
+*dry-run estimate by default*; pass `opts.runFullGrid = true` and
+`opts.fullGridNumMc` to actually execute the full grid.
+
+```matlab
+addpath('matlab');
+out = profile_aas_monte_carlo_runtime();           % small + medium
+out = profile_aas_monte_carlo_runtime(struct( ...
+    'cases', {{'small'}}, ...
+    'verbose', true, ...
+    'quiet',   true));                             % minimal output
+```
+
+The result struct contains per-case timings (`elapsedSeconds`,
+`secondsPerDraw`, `secondsPerCellPerDraw`) plus an `extrapolation`
+sub-struct with `numMc1e3 / numMc1e4 / numMc1e5` runtime estimates and a
+linked memory estimate from `estimate_aas_mc_memory`.
+
+### Chunking, progress, reproducibility
+
+`run_imt_aas_eirp_monte_carlo` accepts three controls relevant to large
+runs:
+
+| field               | type    | default     | meaning                                                  |
+| ------------------- | ------- | ----------- | -------------------------------------------------------- |
+| `mcOpts.seed`       | scalar  | (unset)     | RNG seed; identical seeds reproduce identical stats.     |
+| `mcOpts.mcChunkSize`| integer | `numMc`     | Process MC draws in chunks of this size.                 |
+| `mcOpts.progressEvery` | int  | 0 (silent)  | Print `[MC] i / N (..%) elapsed=.. ETA=..` every N draws.|
+
+Chunking does **not** change the RNG sequence, the loop iteration order,
+or the streaming aggregator update; chunked and unchunked runs with the
+same seed produce **bit-identical** `counts / sum_lin_mW / min_dBm /
+max_dBm`. This is exercised by `test_runtime_scaling_controls`.
+
+The driver also reports `stats.elapsedSeconds` (wall-clock seconds spent
+inside the MC loop) so callers can record per-run timing without
+wrapping `tic / toc` themselves.
+
+### Recommended workflow
+
+1. **Run the test suite** to confirm the antenna math and streaming
+   aggregator are healthy in your environment:
+
+   ```matlab
+   run_all_tests
+   ```
+
+2. **Run the small demo** end-to-end to sanity-check plotting and the
+   per-(az,el) summary:
+
+   ```matlab
+   addpath('matlab');
+   out = demo_aas_monte_carlo_eirp();
+   ```
+
+3. **Run the profiler** to measure per-cell-per-draw cost on the local
+   machine and to extrapolate to the full grid:
+
+   ```matlab
+   prof = profile_aas_monte_carlo_runtime();
+   ```
+
+4. **Estimate memory** for the chosen grid / numMc / countType:
+
+   ```matlab
+   mem = estimate_aas_mc_memory(361, 181, 170, 'uint32', ...
+       struct('numMc', 1e4, 'verbose', true));
+   ```
+
+5. **Run the full grid** with the chosen `numMc`, a fixed `seed`, and
+   chunking + progress reporting tuned for the run:
+
+   ```matlab
+   mcOpts = struct( ...
+       'numMc', 1e4, 'azGrid', -180:1:180, 'elGrid', -90:1:90, ...
+       'binEdges', -50:1:120, ...
+       'seed', 1, 'mcChunkSize', 500, 'progressEvery', 500, ...
+       'beamSampler', struct('mode', 'sector', ...
+           'sector_az', 0, 'sector_az_width', 120, ...
+           'elev_range', [-10, 0], 'numBeams', 1));
+   stats = run_imt_aas_eirp_monte_carlo(cfg, mcOpts);
+   ```
+
+6. **Export the percentile table** for downstream consumers:
+
+   ```matlab
+   export_eirp_percentile_table(stats, 'eirp_percentile_table.csv');
+   ```
+
+`test_runtime_scaling_controls` covers:
+
+* the memory estimator returns positive finite estimates and rejects
+  unknown `countType`s
+* the raw-cube warning fires when the implied raw cube exceeds the
+  configurable threshold (and stays quiet otherwise)
+* the profiler runs a tiny benchmark without error and reports
+  `secondsPerDraw > 0`
+* chunked and unchunked runs with the same seed produce bit-identical
+  streaming statistics
+* identical seeds produce identical stats; different seeds do not
+* `progressEvery = 0` emits no progress lines, while `progressEvery > 0`
+  emits at least one `[MC] ... ETA=...` line
+

@@ -20,12 +20,20 @@ function stats = run_imt_aas_eirp_monte_carlo(cfg, mcOpts)
 %       .beamSampler     struct passed to sample_aas_beam_direction
 %                        (default uniform sector pointing)
 %       .seed            scalar RNG seed (optional)
-%       .progressEvery   integer, print progress every N draws (default 0)
+%       .progressEvery   integer, print progress every N draws (default 0).
+%                        Output includes percent complete, elapsed time,
+%                        and estimated remaining time. Set to 0 to disable.
+%       .mcChunkSize     integer, optional. Process Monte Carlo draws in
+%                        chunks of this size. Defaults to numMc (single
+%                        chunk). Chunking does not change the RNG sequence
+%                        and produces results bit-identical to an unchunked
+%                        run with the same seed.
 %       .combineBeams    'max' (default) or 'sum_mW'. With multiple active
 %                        beams per draw, take per-cell maximum EIRP or
 %                        linear-power sum across beams before updating.
 %
-%   STATS fields (see update_eirp_histograms for shapes).
+%   STATS fields (see update_eirp_histograms for shapes), plus:
+%       .elapsedSeconds  wall-clock seconds spent inside the MC loop.
 
     if nargin < 2 || ~isstruct(mcOpts)
         error('run_imt_aas_eirp_monte_carlo:missingOpts', ...
@@ -55,6 +63,13 @@ function stats = run_imt_aas_eirp_monte_carlo(cfg, mcOpts)
     if ~isfield(mcOpts, 'combineBeams') || isempty(mcOpts.combineBeams)
         mcOpts.combineBeams = 'max';
     end
+    if ~isfield(mcOpts, 'mcChunkSize') || isempty(mcOpts.mcChunkSize)
+        mcOpts.mcChunkSize = mcOpts.numMc;
+    end
+    if mcOpts.mcChunkSize < 1
+        error('run_imt_aas_eirp_monte_carlo:badChunkSize', ...
+            'mcOpts.mcChunkSize must be a positive integer.');
+    end
     if isfield(mcOpts, 'seed') && ~isempty(mcOpts.seed)
         rng(mcOpts.seed);
     end
@@ -83,24 +98,42 @@ function stats = run_imt_aas_eirp_monte_carlo(cfg, mcOpts)
     stats.mcOpts     = mcOpts;
 
     progressEvery = mcOpts.progressEvery;
+    chunkSize     = min(mcOpts.mcChunkSize, mcOpts.numMc);
+    numMc         = mcOpts.numMc;
 
-    for it = 1:mcOpts.numMc
-        [azim_i, elev_i] = sample_aas_beam_direction(mcOpts.beamSampler);
+    tStart = tic;
 
-        if numel(azim_i) == 1
-            eirp_dBm = imt_aas_bs_eirp(AZ, EL, azim_i, elev_i, cfg);
-        else
-            eirp_dBm = combineMultiBeam(AZ, EL, azim_i, elev_i, cfg, ...
-                                        mcOpts.combineBeams);
+    nDone = 0;
+    while nDone < numMc
+        nThis = min(chunkSize, numMc - nDone);
+        for it = 1:nThis
+            iter = nDone + it;
+
+            [azim_i, elev_i] = sample_aas_beam_direction(mcOpts.beamSampler);
+
+            if numel(azim_i) == 1
+                eirp_dBm = imt_aas_bs_eirp(AZ, EL, azim_i, elev_i, cfg);
+            else
+                eirp_dBm = combineMultiBeam(AZ, EL, azim_i, elev_i, cfg, ...
+                                            mcOpts.combineBeams);
+            end
+
+            stats = update_eirp_histograms(stats, eirp_dBm);
+
+            if progressEvery > 0 && mod(iter, progressEvery) == 0
+                tElapsed   = toc(tStart);
+                tPerDraw   = tElapsed / iter;
+                tRemaining = tPerDraw * (numMc - iter);
+                fprintf(['[MC] %d / %d (%.1f%%) ' ...
+                         'elapsed=%.2fs ETA=%.2fs\n'], ...
+                    iter, numMc, 100 * iter / numMc, ...
+                    tElapsed, tRemaining);
+            end
         end
-
-        stats = update_eirp_histograms(stats, eirp_dBm);
-
-        if progressEvery > 0 && mod(it, progressEvery) == 0
-            fprintf('[MC] %d / %d (%.1f%%)\n', ...
-                it, mcOpts.numMc, 100 * it / mcOpts.numMc);
-        end
+        nDone = nDone + nThis;
     end
+
+    stats.elapsedSeconds = toc(tStart);
 
     % derived field convenient for users
     stats.mean_lin_mW = stats.sum_lin_mW ./ max(stats.numMc, 1);
