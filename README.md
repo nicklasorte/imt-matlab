@@ -30,6 +30,8 @@ matlab/
 ├── sample_aas_beam_direction.m        beam-pointing samplers (uniform/sector/fixed/list/ue_sector)
 ├── update_eirp_histograms.m           streaming per-cell stats update
 ├── run_imt_aas_eirp_monte_carlo.m     MC driver, never stores the EIRP cube
+├── runR23AasEirpCdfGrid.m             source-aligned R23 EIRP CDF-grid MVP
+├── plotR23AasEirpCdfGrid.m            mean + percentile heatmaps for the R23 MVP
 ├── eirp_percentile_maps.m             per-angle percentile maps from histograms
 ├── eirp_cdf_at_angle.m                empirical CDF at one (az,el)
 ├── eirp_exceedance_maps.m             P(EIRP > threshold) maps
@@ -45,7 +47,8 @@ matlab/
 ├── test_r23_extended_aas_eirp.m       self tests for the R23 extended AAS path
 ├── estimate_aas_mc_memory.m           memory estimator for hist / pctile / CSV
 ├── profile_aas_monte_carlo_runtime.m  runtime profiler + full-grid extrapolation
-└── test_runtime_scaling_controls.m    self tests for chunking / memory / progress
+├── test_runtime_scaling_controls.m    self tests for chunking / memory / progress
+└── test_runR23AasEirpCdfGrid.m        self tests for the R23 EIRP CDF-grid MVP
 ```
 
 ## What was ported from pycraf
@@ -607,12 +610,162 @@ gain, no I / N, no CDF / CCDF, no coordination-distance logic, no TDD
 activity factor, no network loading factor, no multi-site / 19-site
 cluster, no FS / FSS receiver geometry, and no IMT / UE scheduling.
 
+## R23 7/8 GHz Extended AAS EIRP CDF-grid MVP
+
+`runR23AasEirpCdfGrid(opts)` is the **source-aligned MVP** for the
+R23 7.125-8.4 GHz Extended AAS per-(az, el) **EIRP CDF-grid generator**.
+It is `imtAasDefaultParams` + `imtAasGenerateBeamSet` +
+`imtAasSectorEirpGridFromBeams` driven by a streaming Monte Carlo loop:
+each draw samples `numBeams` UE-driven beam steering angles, builds the
+aggregate antenna-face sector EIRP grid by linear-mW summation across
+the simultaneous beams, and updates a fixed-size per-cell histogram.
+The full per-draw EIRP cube is **never** materialised.
+
+This is **antenna-face EIRP only**. There is **no path loss**, **no
+receiver antenna**, **no receiver gain**, **no I / N**, **no
+propagation**, **no coordination distance**, and **no 19-site
+laydown** in this slice.
+
+### How to run
+
+```matlab
+addpath('matlab');
+
+% Default 1000-draw run on the full grid, urban macro, 3 simultaneous UEs
+out = runR23AasEirpCdfGrid();
+
+% End-to-end example: 100 draws, plots, CSV + metadata under examples/output/
+runR23AasEirpCdfGridExample
+```
+
+`opts` (all fields optional):
+
+| field | default | meaning |
+| ----- | ------- | ------- |
+| `numMc`              | `1000`                          | Monte Carlo draws |
+| `azGridDeg`          | `-180:1:180`                    | azimuth grid [deg] |
+| `elGridDeg`          | ` -90:1:90`                     | elevation grid [deg] |
+| `binEdgesDbm`        | `-100:1:120`                    | histogram bin edges [dBm] |
+| `percentiles`        | `[1 5 10 20 50 80 90 95 99]`   | percentile maps to compute |
+| `seed`               | `1`                             | RNG seed (set once at start) |
+| `deployment`         | `'macroUrban'`                  | `'macroUrban'` or `'macroSuburban'` |
+| `numBeams`           | `params.numUesPerSector` (= 3) | simultaneous UE beams per sector |
+| `splitSectorPower`   | `true`                          | split sector EIRP across simultaneous beams |
+| `progressEvery`      | `0`                             | print progress every N draws |
+| `mcChunkSize`        | `min(numMc, 500)`               | (reserved for forward compatibility) |
+| `outputCsvPath`      | `''`                            | optional `p000:p100` table CSV |
+| `outputMetadataPath` | `''`                            | optional JSON / text metadata sidecar |
+
+`out.stats` is the streaming aggregator (counts, sum_lin_mW, min/max,
+mean_dBm, plus `perBeamPeakEirpDbm`, `sectorEirpDbm`, `numBeams`,
+`deployment`). `out.percentileMaps` is the struct from
+`eirp_percentile_maps`. `out.metadata` carries the explicit
+no-path-loss / no-receiver / no-I-N caveats and the source-aligned R23
+power semantics.
+
+### UE-driven 3-beam sector snapshots
+
+Each Monte Carlo draw represents one *sector snapshot* of `numBeams`
+simultaneously served UEs. `imtAasGenerateBeamSet`:
+
+```
+imtAasSampleUePositions  ->  imtAasUeToBeamAngles  ->  imtAasApplyBeamLimits
+```
+
+samples UE positions uniformly in area within the sector annulus, maps
+each to a raw beam steering angle, and clamps to the R23 steering
+envelope (`az ∈ [-60, 60]`, `el ∈ [-10, 0]` deg). The per-beam EIRP
+grids are produced by `imtAasEirpGrid` and combined into the aggregate
+grid by `imtAasSectorEirpGridFromBeams`:
+
+```
+aggregateEirpDbm = 10*log10(sum(10.^(perBeamEirpDbm / 10), 3))
+```
+
+### Power semantics (R23 macro 7.125-8.4 GHz)
+
+| field                       | value | meaning |
+| --------------------------- | ----- | ------- |
+| `txPowerDbmPer100MHz`       | `46.1` | conducted BS transmit power [dBm / 100 MHz] |
+| `peakGainDbi`               | `32.2` | peak composite antenna gain [dBi] |
+| `sectorEirpDbm`             | `78.3` | **sector peak** EIRP [dBm / 100 MHz] = 46.1 + 32.2 |
+| `numUesPerSector`           | `3`    | simultaneously served UEs per sector |
+| `defaultSplitSectorPowerAcrossBeams` | `true` | per-beam peak EIRP split across simultaneous beams |
+
+Key points:
+
+* A **single reference beam** may peak at the full sector EIRP,
+  `78.3 dBm / 100 MHz`.
+* In a **3-UE simultaneous snapshot** the sector power is split across
+  the three BS-UE links:
+  ```
+  perBeamPeakEirpDbm = sectorEirpDbm - 10*log10(numBeams)
+                     = 78.3 - 10*log10(3)
+                     ~ 73.53 dBm / 100 MHz
+  ```
+* The aggregate sector EIRP grid is a **linear power sum** across the
+  simultaneous beams (not an envelope). When the three beams point in
+  identical directions the aggregate peak returns to ~78.3 dBm/100 MHz
+  (three -4.77 dB peaks summing in linear power); when they point in
+  different directions the aggregate peak is below 78.3 dBm/100 MHz.
+
+### Streaming histograms / percentile maps
+
+`runR23AasEirpCdfGrid` reuses `update_eirp_histograms` and
+`eirp_percentile_maps`, so a 65,341-cell `(az, el)` grid with
+`numMc = 1e4` runs without materialising the ~5.2 GiB raw EIRP cube.
+The streaming aggregator is the only state that grows with grid size,
+not with `numMc`.
+
+### CDF semantics
+
+`out.percentileMaps` is the source-side Monte Carlo CDF over UE-driven
+beam pointings, **not** a time-probability distribution. There is no
+TDD activity factor, no network loading, and no propagation in this
+slice; do not interpret percentiles as the probability that a victim
+receiver sees a given EIRP unless those layers are added downstream.
+
+### Files added in this slice
+
+| file | role |
+| ---- | ---- |
+| `matlab/runR23AasEirpCdfGrid.m`        | source-aligned R23 EIRP CDF-grid runner |
+| `matlab/plotR23AasEirpCdfGrid.m`       | mean + per-percentile heatmaps |
+| `examples/runR23AasEirpCdfGridExample.m` | small deterministic end-to-end demo |
+| `matlab/test_runR23AasEirpCdfGrid.m`   | self tests, wired into `run_all_tests` |
+
+### Scope (what this slice is NOT)
+
+This slice is **antenna-face EIRP only**. It does **not** add path
+loss, propagation, receiver antennas, receiver gain, I / N, FS / FSS
+receiver geometry, coordination-distance logic, multi-site / 19-site
+aggregation, IMT / UE scheduling, TDD activity factor, network loading
+factor, or full SSB / CSI-RS / PMI beam acquisition. The UE-driven
+beam pointing is a first approximation; SSB / PDSCH / PMI is a
+follow-up PR and lives below the streaming aggregator.
+
 ## EMBRSS-style EIRP CDF-grid first step
 
-`run_embrss_eirp_cdf_grid(category, opts)` is the first step of an
-EMBRSS recreation: a per-(az, el) **EIRP CDF-grid generator** for an IMT
-AAS base station, organised by deployment category. It is *only* the
-antenna / EIRP piece. It explicitly does **not** implement:
+`run_embrss_eirp_cdf_grid(category, opts)` is now a thin wrapper
+around `runR23AasEirpCdfGrid` (the R23 7/8 GHz Extended AAS MVP) for
+the `'urban_macro'` and `'suburban_macro'` categories:
+
+| `category`        | maps to                                |
+| ----------------- | -------------------------------------- |
+| `urban_macro`     | `runR23AasEirpCdfGrid` w/ `'macroUrban'`    |
+| `suburban_macro`  | `runR23AasEirpCdfGrid` w/ `'macroSuburban'` |
+| `rural_macro`     | legacy M.2101 wrapper (no R23 sector preset) |
+
+To force the legacy M.2101 path (the previous default), pass
+`opts.legacyM2101 = true`. Legacy mode preserves the original
+behaviour exactly: it drives `run_imt_aas_eirp_monte_carlo` via
+`embrss_aas_config` + the `ue_sector` beam sampler, and returns
+`out.cfg` / `out.model` / `out.mcOpts` alongside the streaming stats.
+The R23 path returns `out.params` / `out.sector` / `out.opts` instead;
+`out.pathway` is `'r23'` or `'legacy_m2101'` so callers can branch.
+
+This is *only* the antenna / EIRP piece in either path. It explicitly
+does **not** implement:
 
 * full Quadriga SSB acquisition / CSI-RS / PMI selection (the per-draw
   beam pointing is a UE-driven sector approximation; SSB/PDSCH/PMI is a
@@ -624,9 +777,10 @@ antenna / EIRP piece. It explicitly does **not** implement:
 * aggregate I / N
 * separation-distance search
 
-The wrapper resolves a category preset, builds an AAS config, drives
-`run_imt_aas_eirp_monte_carlo` with `beamSampler.mode = 'ue_sector'`,
-and collapses the streaming histograms into mean / percentile maps.
+In legacy mode the wrapper resolves a category preset, builds an AAS
+config, drives `run_imt_aas_eirp_monte_carlo` with
+`beamSampler.mode = 'ue_sector'`, and collapses the streaming histograms
+into mean / percentile maps.
 
 ### Categories
 

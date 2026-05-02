@@ -1,59 +1,57 @@
 function out = run_embrss_eirp_cdf_grid(category, opts)
-%RUN_EMBRSS_EIRP_CDF_GRID EMBRSS-style per-(az,el) EIRP CDF-grid generator.
+%RUN_EMBRSS_EIRP_CDF_GRID Per-(az,el) EIRP CDF-grid generator (R23 by default).
 %
 %   OUT = run_embrss_eirp_cdf_grid(CATEGORY)
 %   OUT = run_embrss_eirp_cdf_grid(CATEGORY, OPTS)
 %
-%   Antenna-only first step of the EMBRSS recreation. Drives the existing
-%   streaming Monte Carlo runner with a UE-driven sector beam sampler and
-%   per-category geometry, then collapses the result into per-(az,el) CDFs
-%   and percentile maps. **No** propagation, clutter, FDR, FS/FSS antenna,
-%   19-site aggregation, I/N or separation-distance search is performed.
+%   By default this function is now a thin wrapper around the source-aligned
+%   R23 7/8 GHz Extended AAS runner, runR23AasEirpCdfGrid. Category mapping:
 %
-%   Inputs
-%   ------
-%   CATEGORY    char/string scalar; passed to embrss_category_model
-%               ('urban_macro' / 'suburban_macro' / 'rural_macro').
-%   OPTS        optional struct with overrides:
-%       .numMc           default 1000
-%       .azGrid          default -180:1:180
-%       .elGrid          default  -90:1:90
-%       .binEdges        default  -80:1:120 [dBm]
-%       .seed            default 1
-%       .progressEvery   default 0 (silent)
-%       .mcChunkSize     default min(numMc, 500)
-%       .numBeams        default model.default_num_beams
-%       .combineBeams    'max' | 'sum_mW' (default model.default_combine_beams)
-%       .powerMode       'conducted' | 'peak_eirp' (default 'conducted')
-%       .txPower_dBm     forwarded to embrss_aas_config (conducted mode)
-%       .peakEirp_dBm    forwarded to embrss_aas_config (peak_eirp mode)
-%       .peakGain_dBi    forwarded to embrss_aas_config (peak_eirp mode)
-%       .percentiles     default [1 5 10 20 50 80 90 95 99]
-%       .outputCsvPath   if non-empty, also writes the p000..p100 table
-%       .modelOverrides  cell array {name,val,...} forwarded to
-%                        embrss_category_model
-%       .cfgOverrides    cell array {name,val,...} forwarded to
-%                        embrss_aas_config (after powerMode/txPower/etc.)
+%       'urban_macro'    -> deployment 'macroUrban'    (R23 path)
+%       'suburban_macro' -> deployment 'macroSuburban' (R23 path)
+%       'rural_macro'    -> legacy M.2101 path (no R23 sector preset)
 %
-%   Output
-%   ------
-%   OUT struct:
-%       .category          (char) input category
-%       .model             struct from embrss_category_model
-%       .cfg               struct from embrss_aas_config
-%       .mcOpts            mcOpts struct passed to the Monte Carlo runner
-%       .stats             stats from run_imt_aas_eirp_monte_carlo
-%       .percentileMaps    struct from eirp_percentile_maps
-%       .percentileTable   table from export_eirp_percentile_table
-%                          (only when opts.outputCsvPath is provided)
-%       .metadata          struct with versioning + a short caveat string
+%   To force the legacy M.2101 path (the previous default), pass
+%   OPTS.legacyM2101 = true. Legacy mode preserves the old behaviour
+%   exactly: it drives run_imt_aas_eirp_monte_carlo via embrss_aas_config
+%   + the ue_sector beam sampler, and returns OUT with the original
+%   .category / .model / .cfg / .mcOpts / .stats / .percentileMaps fields.
 %
-%   Caveat
-%   ------
-%   This is an EMBRSS-style antenna/EIRP CDF-grid generator only. It uses
-%   UE-driven sector beam pointing as a first approximation, NOT a full
-%   SSB / CSI / PMI Quadriga model. A later PR can swap the beam sampler
-%   for a true SSB/PDSCH/PMI implementation without touching this driver.
+%   This is antenna-face EIRP only. There is NO path loss, NO clutter,
+%   NO receiver antenna, NO I / N, NO FS / FSS receiver geometry, NO
+%   coordination-distance search, and NO multi-site aggregation in
+%   either path.
+%
+%   Inputs (OPTS struct fields, all optional):
+%       Common (both paths):
+%           .numMc, .seed, .progressEvery, .percentiles,
+%           .outputCsvPath
+%       R23 path (default for urban_macro / suburban_macro):
+%           .azGridDeg or .azGrid, .elGridDeg or .elGrid,
+%           .binEdgesDbm or .binEdges,
+%           .numBeams, .splitSectorPower, .mcChunkSize,
+%           .deployment (overrides the category->deployment mapping)
+%       Legacy path (forced via .legacyM2101 = true, or rural_macro):
+%           .azGrid, .elGrid, .binEdges, .numBeams, .combineBeams,
+%           .powerMode, .txPower_dBm, .peakEirp_dBm, .peakGain_dBi,
+%           .modelOverrides, .cfgOverrides
+%       Special:
+%           .legacyM2101    logical (default false). When true, force
+%                           the legacy M.2101 wrapper around
+%                           run_imt_aas_eirp_monte_carlo.
+%
+%   Output (OUT struct):
+%       Common:
+%           .category, .stats, .percentileMaps, .metadata,
+%           .percentileTable (when opts.outputCsvPath is provided).
+%       R23 path additionally exposes:
+%           .params, .sector, .opts (resolved R23 opts), .pathway = 'r23'.
+%       Legacy path additionally exposes:
+%           .model, .cfg, .mcOpts, .pathway = 'legacy_m2101'.
+%
+%   See also: runR23AasEirpCdfGrid, imtAasDefaultParams,
+%             imtAasSingleSectorParams, run_imt_aas_eirp_monte_carlo,
+%             eirp_percentile_maps, export_eirp_percentile_table.
 
     if nargin < 2 || isempty(opts)
         opts = struct();
@@ -63,7 +61,100 @@ function out = run_embrss_eirp_cdf_grid(category, opts)
             'OPTS must be a struct (or omitted).');
     end
 
-    % --- resolve category model --------------------------------------
+    legacyM2101 = false;
+    if isfield(opts, 'legacyM2101') && ~isempty(opts.legacyM2101)
+        legacyM2101 = logical(opts.legacyM2101);
+    end
+
+    [deployment, deploymentOk] = mapCategoryToDeployment(category);
+    if ~deploymentOk
+        % rural_macro and any other unsupported category fall back to
+        % the legacy path (which has full embrss_category_model support).
+        legacyM2101 = true;
+    end
+
+    if legacyM2101
+        out = legacyRun(category, opts);
+    else
+        out = r23Run(category, deployment, opts);
+    end
+end
+
+% =====================================================================
+% R23 path (default for urban_macro / suburban_macro)
+% =====================================================================
+function out = r23Run(category, deployment, opts)
+    r23Opts = struct();
+    r23Opts.deployment = deployment;
+    if isfield(opts, 'deployment') && ~isempty(opts.deployment)
+        r23Opts.deployment = opts.deployment;
+    end
+    if isfield(opts, 'numMc') && ~isempty(opts.numMc)
+        r23Opts.numMc = opts.numMc;
+    end
+    % azGridDeg accepts either azGridDeg (new) or azGrid (legacy)
+    if isfield(opts, 'azGridDeg') && ~isempty(opts.azGridDeg)
+        r23Opts.azGridDeg = opts.azGridDeg;
+    elseif isfield(opts, 'azGrid') && ~isempty(opts.azGrid)
+        r23Opts.azGridDeg = opts.azGrid;
+    end
+    if isfield(opts, 'elGridDeg') && ~isempty(opts.elGridDeg)
+        r23Opts.elGridDeg = opts.elGridDeg;
+    elseif isfield(opts, 'elGrid') && ~isempty(opts.elGrid)
+        r23Opts.elGridDeg = opts.elGrid;
+    end
+    if isfield(opts, 'binEdgesDbm') && ~isempty(opts.binEdgesDbm)
+        r23Opts.binEdgesDbm = opts.binEdgesDbm;
+    elseif isfield(opts, 'binEdges') && ~isempty(opts.binEdges)
+        r23Opts.binEdgesDbm = opts.binEdges;
+    end
+    if isfield(opts, 'percentiles') && ~isempty(opts.percentiles)
+        r23Opts.percentiles = opts.percentiles;
+    end
+    if isfield(opts, 'seed') && ~isempty(opts.seed)
+        r23Opts.seed = opts.seed;
+    end
+    if isfield(opts, 'numBeams') && ~isempty(opts.numBeams)
+        r23Opts.numBeams = opts.numBeams;
+    end
+    if isfield(opts, 'splitSectorPower') && ~isempty(opts.splitSectorPower)
+        r23Opts.splitSectorPower = opts.splitSectorPower;
+    end
+    if isfield(opts, 'progressEvery') && ~isempty(opts.progressEvery)
+        r23Opts.progressEvery = opts.progressEvery;
+    end
+    if isfield(opts, 'mcChunkSize') && ~isempty(opts.mcChunkSize)
+        r23Opts.mcChunkSize = opts.mcChunkSize;
+    end
+    if isfield(opts, 'outputCsvPath') && ~isempty(opts.outputCsvPath)
+        r23Opts.outputCsvPath = opts.outputCsvPath;
+    end
+    if isfield(opts, 'outputMetadataPath') && ~isempty(opts.outputMetadataPath)
+        r23Opts.outputMetadataPath = opts.outputMetadataPath;
+    end
+
+    inner = runR23AasEirpCdfGrid(r23Opts);
+
+    out = struct();
+    out.category       = char(category);
+    out.pathway        = 'r23';
+    out.params         = inner.params;
+    out.sector         = inner.sector;
+    out.opts           = inner.opts;
+    out.stats          = inner.stats;
+    out.percentileMaps = inner.percentileMaps;
+    if isfield(inner, 'percentileTable')
+        out.percentileTable = inner.percentileTable;
+    end
+    out.metadata = inner.metadata;
+    out.metadata.wrapper = 'run_embrss_eirp_cdf_grid';
+    out.metadata.category = char(category);
+end
+
+% =====================================================================
+% Legacy M.2101 path (preserved exactly)
+% =====================================================================
+function out = legacyRun(category, opts)
     if isfield(opts, 'modelOverrides') && ~isempty(opts.modelOverrides)
         if ~iscell(opts.modelOverrides)
             error('run_embrss_eirp_cdf_grid:badModelOverrides', ...
@@ -74,7 +165,6 @@ function out = run_embrss_eirp_cdf_grid(category, opts)
         model = embrss_category_model(category);
     end
 
-    % --- resolve antenna config --------------------------------------
     cfgArgs = {};
     if isfield(opts, 'powerMode') && ~isempty(opts.powerMode)
         cfgArgs(end+1:end+2) = {'powerMode', opts.powerMode};
@@ -97,7 +187,6 @@ function out = run_embrss_eirp_cdf_grid(category, opts)
     end
     cfg = embrss_aas_config(category, cfgArgs{:});
 
-    % --- build mcOpts ------------------------------------------------
     mcOpts = struct();
     mcOpts.numMc        = getOpt(opts, 'numMc',        1000);
     mcOpts.azGrid       = getOpt(opts, 'azGrid',       -180:1:180);
@@ -123,31 +212,29 @@ function out = run_embrss_eirp_cdf_grid(category, opts)
         'radial_distribution',  'uniform_area', ...
         'numBeams',             numBeams);
 
-    % --- run streaming Monte Carlo -----------------------------------
     stats = run_imt_aas_eirp_monte_carlo(cfg, mcOpts);
 
-    % --- collapse into CDF / percentile maps -------------------------
     percentiles = getOpt(opts, 'percentiles', ...
                          [1 5 10 20 50 80 90 95 99]);
     pmaps = eirp_percentile_maps(stats, percentiles);
 
     out = struct();
     out.category        = char(category);
+    out.pathway         = 'legacy_m2101';
     out.model           = model;
     out.cfg             = cfg;
     out.mcOpts          = mcOpts;
     out.stats           = stats;
     out.percentileMaps  = pmaps;
 
-    % --- optional CSV export -----------------------------------------
     csvPath = getOpt(opts, 'outputCsvPath', '');
     if ~isempty(csvPath)
         out.percentileTable = export_eirp_percentile_table(stats, csvPath);
     end
 
-    % --- metadata ----------------------------------------------------
     out.metadata = struct( ...
         'generator',     'run_embrss_eirp_cdf_grid', ...
+        'pathway',       'legacy_m2101', ...
         'step',          'embrss_first_step_antenna_eirp_cdf_grid', ...
         'beamModel',     'ue_sector_first_approximation', ...
         'caveats',       ['Antenna/EIRP CDF-grid only. No propagation, ' ...
@@ -156,6 +243,29 @@ function out = run_embrss_eirp_cdf_grid(category, opts)
                           'search. UE-sector beam pointing is a first ' ...
                           'approximation; SSB/PDSCH/PMI is a follow-up.'], ...
         'createdAtIso',  iso8601Now());
+end
+
+% =====================================================================
+% Helpers
+% =====================================================================
+function [deployment, ok] = mapCategoryToDeployment(category)
+    if isstring(category)
+        category = char(category);
+    end
+    if ~ischar(category)
+        deployment = '';
+        ok = false;
+        return;
+    end
+    switch lower(category)
+        case 'urban_macro'
+            deployment = 'macroUrban';  ok = true;
+        case 'suburban_macro'
+            deployment = 'macroSuburban'; ok = true;
+        otherwise
+            deployment = '';
+            ok = false;
+    end
 end
 
 function v = getOpt(opts, name, defaultVal)
@@ -171,7 +281,6 @@ function s = iso8601Now()
         s = char(datetime('now','TimeZone','UTC', ...
             'Format','yyyy-MM-dd''T''HH:mm:ss''Z'''));
     catch
-        % datetime may be unavailable in some Octave configs
-        s = datestr(now, 'yyyy-mm-ddTHH:MM:SS');
+        s = datestr(now, 'yyyy-mm-ddTHH:MM:SS'); %#ok<DATST,TNOW1>
     end
 end
