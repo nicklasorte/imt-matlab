@@ -31,6 +31,14 @@ function stats = run_imt_aas_eirp_monte_carlo(cfg, mcOpts)
 %       .combineBeams    'max' (default) or 'sum_mW'. With multiple active
 %                        beams per draw, take per-cell maximum EIRP or
 %                        linear-power sum across beams before updating.
+%       .usePrecomputedGrid
+%                        logical (default true). When true the engine
+%                        builds a precomputed observation grid once and
+%                        evaluates the composite pattern via
+%                        imt2020_composite_pattern_precomputed (factored
+%                        complex GEMVs). Set false to fall back to the
+%                        reference imt_aas_bs_eirp / imt2020_composite_pattern
+%                        path (useful for diffing or debugging).
 %
 %   STATS fields (see update_eirp_histograms for shapes), plus:
 %       .elapsedSeconds  wall-clock seconds spent inside the MC loop.
@@ -70,9 +78,20 @@ function stats = run_imt_aas_eirp_monte_carlo(cfg, mcOpts)
         error('run_imt_aas_eirp_monte_carlo:badChunkSize', ...
             'mcOpts.mcChunkSize must be a positive integer.');
     end
+    if ~isfield(mcOpts, 'usePrecomputedGrid') || isempty(mcOpts.usePrecomputedGrid)
+        mcOpts.usePrecomputedGrid = true;
+    end
     if isfield(mcOpts, 'seed') && ~isempty(mcOpts.seed)
         rng(mcOpts.seed);
     end
+
+    % Default a few CFG fields the optimized fast path needs to know up
+    % front (imt_aas_bs_eirp does the same defaulting on the slow path).
+    if ~isfield(cfg, 'feederLoss_dB') || isempty(cfg.feederLoss_dB)
+        cfg.feederLoss_dB = 0;
+    end
+    if ~isfield(cfg, 'rho') || isempty(cfg.rho); cfg.rho = 1; end
+    if ~isfield(cfg, 'k')   || isempty(cfg.k);   cfg.k   = 12; end
 
     azGrid = mcOpts.azGrid(:).';
     elGrid = mcOpts.elGrid(:).';
@@ -83,6 +102,13 @@ function stats = run_imt_aas_eirp_monte_carlo(cfg, mcOpts)
 
     % Build az/el grids that match update_eirp_histograms shape
     [AZ, EL] = ndgrid(azGrid, elGrid);   % both [Naz x Nel]
+
+    usePrecomputed = logical(mcOpts.usePrecomputedGrid);
+    if usePrecomputed
+        grid = prepare_aas_observation_grid(azGrid, elGrid, cfg);
+    else
+        grid = [];
+    end
 
     % --- init streaming stats --------------------------------------------
     stats = struct();
@@ -112,10 +138,21 @@ function stats = run_imt_aas_eirp_monte_carlo(cfg, mcOpts)
             [azim_i, elev_i] = sample_aas_beam_direction(mcOpts.beamSampler);
 
             if numel(azim_i) == 1
-                eirp_dBm = imt_aas_bs_eirp(AZ, EL, azim_i, elev_i, cfg);
+                if usePrecomputed
+                    gain_dBi = imt2020_composite_pattern_precomputed( ...
+                        grid, azim_i, elev_i, cfg.rho, cfg.k);
+                    eirp_dBm = cfg.txPower_dBm + gain_dBi - cfg.feederLoss_dB;
+                else
+                    eirp_dBm = imt_aas_bs_eirp(AZ, EL, azim_i, elev_i, cfg);
+                end
             else
-                eirp_dBm = combineMultiBeam(AZ, EL, azim_i, elev_i, cfg, ...
-                                            mcOpts.combineBeams);
+                if usePrecomputed
+                    eirp_dBm = combineMultiBeamPrecomputed(grid, ...
+                        azim_i, elev_i, cfg, mcOpts.combineBeams);
+                else
+                    eirp_dBm = combineMultiBeam(AZ, EL, ...
+                        azim_i, elev_i, cfg, mcOpts.combineBeams);
+                end
             end
 
             stats = update_eirp_histograms(stats, eirp_dBm);
@@ -146,6 +183,21 @@ function eirp = combineMultiBeam(AZ, EL, azim_i, elev_i, cfg, combineMode)
     for b = 1:nB
         eirpStack(:,:,b) = imt_aas_bs_eirp(AZ, EL, azim_i(b), elev_i(b), cfg);
     end
+    eirp = reduceBeams(eirpStack, combineMode);
+end
+
+function eirp = combineMultiBeamPrecomputed(grid, azim_i, elev_i, cfg, combineMode)
+    nB = numel(azim_i);
+    eirpStack = zeros([grid.Naz, grid.Nel, nB]);
+    for b = 1:nB
+        gain_dBi = imt2020_composite_pattern_precomputed( ...
+            grid, azim_i(b), elev_i(b), cfg.rho, cfg.k);
+        eirpStack(:,:,b) = cfg.txPower_dBm + gain_dBi - cfg.feederLoss_dB;
+    end
+    eirp = reduceBeams(eirpStack, combineMode);
+end
+
+function eirp = reduceBeams(eirpStack, combineMode)
     switch lower(combineMode)
         case 'max'
             eirp = max(eirpStack, [], 3);

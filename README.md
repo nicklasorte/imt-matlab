@@ -10,7 +10,9 @@ for per-direction EIRP statistics.
 run_all_tests.m                        single entry point for the test suite
 matlab/
 ├── imt2020_single_element_pattern.m   single element gain (M.2101 Table 4)
-├── imt2020_composite_pattern.m        composite array gain
+├── imt2020_composite_pattern.m        composite array gain (reference path)
+├── imt2020_composite_pattern_precomputed.m  vectorized composite pattern reusing a precomputed grid
+├── prepare_aas_observation_grid.m     precompute fixed AZ/EL/element terms
 ├── imt_aas_bs_eirp.m                  conducted-power-to-EIRP mapping
 ├── sample_aas_beam_direction.m        beam-pointing samplers (uniform/sector/fixed/list/ue_sector)
 ├── update_eirp_histograms.m           streaming per-cell stats update
@@ -27,7 +29,11 @@ matlab/
 ├── test_ue_sector_sampler.m           self tests for the ue_sector beam sampler
 ├── estimate_aas_mc_memory.m           memory estimator for hist / pctile / CSV
 ├── profile_aas_monte_carlo_runtime.m  runtime profiler + full-grid extrapolation
-└── test_runtime_scaling_controls.m    self tests for chunking / memory / progress
+├── test_runtime_scaling_controls.m    self tests for chunking / memory / progress
+└── test_vectorized_equivalence.m      precomputed-grid path equivalence tests
+docs/
+└── reviews/
+    └── imt_006_vectorization_review.md  vectorization review artifact
 ```
 
 ## What was ported from pycraf
@@ -455,16 +461,70 @@ The result struct contains per-case timings (`elapsedSeconds`,
 sub-struct with `numMc1e3 / numMc1e4 / numMc1e5` runtime estimates and a
 linked memory estimate from `estimate_aas_mc_memory`.
 
+### Optimized hot path (precomputed observation grid)
+
+The Monte Carlo driver evaluates the M.2101 composite pattern once per
+draw. Profiling showed the bottleneck was inside
+`imt2020_composite_pattern.m`: a `[Naz x Nel x N_H x N_V]` complex
+phase tensor was being re-allocated, the internal trig
+(`cos(theta)`, `sin(theta)`, `sin(phi)`) was being re-evaluated, and
+`A_E` was being rebuilt on **every** draw, even though all of those
+terms depend only on the (fixed) az/el grid and the (fixed) array
+geometry. The optimized path reuses two helpers:
+
+* `prepare_aas_observation_grid(azGrid, elGrid, cfg)` precomputes the
+  ndgrid, `cos(theta) / sin(theta) / sin(phi)`, the observation-phase
+  arrays `a = d_V * cos(theta)` and `b = d_H * sin(theta) * sin(phi)`,
+  the per-grid complex tensors `Hm = exp(j * 2*pi * m * b)` and
+  `Vn = exp(j * 2*pi * n * a)`, and the single-element pattern `A_E`.
+  All of these are built once before the MC loop.
+
+* `imt2020_composite_pattern_precomputed(grid, azim_i, elev_i)` consumes
+  the precomputed grid. The (m,n) coherent sum factors as
+  `S = Sn * Sm`, where `Sn` and `Sm` are the products of the cached
+  complex tensors with two `N_V`- and `N_H`-length pointing factors;
+  these reduce to two complex GEMVs per draw.
+
+`run_imt_aas_eirp_monte_carlo` controls the optimization with
+`mcOpts.usePrecomputedGrid` (default `true`):
+
+| value         | path |
+| ------------- | ---- |
+| `true`        | precomputed grid + `imt2020_composite_pattern_precomputed` |
+| `false`       | reference `imt_aas_bs_eirp` / `imt2020_composite_pattern` |
+
+Both paths are equivalence-tested in `test_vectorized_equivalence`. The
+fallback exists for diffing, debugging, or recovering exact bit-equality
+with older runs that predate the optimization.
+
+> **Runtime caveat.** The vectorization was developed without a local
+> MATLAB interpreter. **Always run `run_all_tests` and
+> `profile_aas_monte_carlo_runtime` locally before kicking off a full-
+> grid production sweep** to confirm the equivalence test passes,
+> wall-clock matches the extrapolation, and the streaming-stats outputs
+> look sane on the target hardware.
+
+```matlab
+mcOpts.usePrecomputedGrid = true;   % default
+mcOpts.usePrecomputedGrid = false;  % reference path (fallback)
+```
+
+`profile_aas_monte_carlo_runtime` runs each case twice by default
+(reference + optimized) and reports the speedup factor and a small
+spot-check of the max numerical difference between the two paths. Pass
+`opts.compareModes = false` if you only need the optimized timing.
+
 ### Chunking, progress, reproducibility
 
 `run_imt_aas_eirp_monte_carlo` accepts three controls relevant to large
 runs:
 
-| field               | type    | default     | meaning                                                  |
-| ------------------- | ------- | ----------- | -------------------------------------------------------- |
-| `mcOpts.seed`       | scalar  | (unset)     | RNG seed; identical seeds reproduce identical stats.     |
-| `mcOpts.mcChunkSize`| integer | `numMc`     | Process MC draws in chunks of this size.                 |
-| `mcOpts.progressEvery` | int  | 0 (silent)  | Print `[MC] i / N (..%) elapsed=.. ETA=..` every N draws.|
+| field                       | type    | default     | meaning                                                  |
+| --------------------------- | ------- | ----------- | -------------------------------------------------------- |
+| `mcOpts.seed`               | scalar  | (unset)     | RNG seed; identical seeds reproduce identical stats.     |
+| `mcOpts.mcChunkSize`        | integer | `numMc`     | Process MC draws in chunks of this size.                 |
+| `mcOpts.progressEvery`      | int     | 0 (silent)  | Print `[MC] i / N (..%) elapsed=.. ETA=..` every N draws.|
+| `mcOpts.usePrecomputedGrid` | logical | `true`      | Use the precomputed-grid optimized hot path. Set `false` to fall back to the reference `imt_aas_bs_eirp` path. |
 
 Chunking does **not** change the RNG sequence, the loop iteration order,
 or the streaming aggregator update; chunked and unchunked runs with the
@@ -525,6 +585,23 @@ wrapping `tic / toc` themselves.
    ```matlab
    export_eirp_percentile_table(stats, 'eirp_percentile_table.csv');
    ```
+
+`test_vectorized_equivalence` covers:
+
+* `imt2020_composite_pattern_precomputed` matches the reference
+  `imt2020_composite_pattern` on a near-boresight grid at three beam
+  directions (`(0,0)`, `(30,-5)`, `(-45,-10)`) within `<= 1e-9` dB
+* the same equivalence on a spec-style coarse grid (`-180:10:180`,
+  `-90:10:90`) over finite cells
+* end-to-end MC agreement between `usePrecomputedGrid=true` and
+  `=false` on a fixed-beam, fixed-seed run (`sum_lin_mW`, `min_dBm`,
+  `max_dBm`, and `counts` all match within float noise)
+* `update_eirp_histograms` matches a per-cell loop reference bit-for-bit
+* counts always sum to `numMc` per `(az,el)` cell after the optimized
+  histogram update
+* per-cell `min_dBm` / `max_dBm` / `mean_lin_mW` match an independent
+  `imt_aas_bs_eirp`-based recomputation of the EIRP cube on a small
+  fixed-seed case
 
 `test_runtime_scaling_controls` covers:
 

@@ -12,6 +12,12 @@ function stats = update_eirp_histograms(stats, eirp_dBm)
 %   STATS.numMc       running count of Monte Carlo draws aggregated.
 %
 %   EIRP_DBM is the new EIRP slice [Naz x Nel] from the current draw.
+%
+%   Implementation note: each draw increments exactly one bin per (az,el)
+%   cell, so the linear indices into the [Naz x Nel x Nbin] count cube are
+%   guaranteed unique. We exploit that with a single direct indexed
+%   increment instead of building an accumarray scatter list (which
+%   internally sorts/groups its index argument).
 
     edges = stats.binEdges;
     Nbin  = numel(edges) - 1;
@@ -25,21 +31,25 @@ function stats = update_eirp_histograms(stats, eirp_dBm)
 
     % --- histogram (vectorised across all (az,el) cells) -------------------
     % Bin index per cell: 1..Nbin, clipped so out-of-range goes into the
-    % first/last bin (matches typical CDF clipping).
+    % first/last bin (matches typical CDF clipping). NaN is funneled to the
+    % last bin to mirror the previous behavior.
     binIdx = discretize(eirp_dBm, edges);
     binIdx(eirp_dBm < edges(1))     = 1;
     binIdx(eirp_dBm >= edges(end))  = Nbin;
     binIdx(isnan(binIdx))           = Nbin;
 
     [Naz, Nel] = size(eirp_dBm);
-    azIdx = repmat((1:Naz).', 1, Nel);
-    elIdx = repmat( 1:Nel,    Naz, 1);
+    NazNel     = Naz * Nel;
+    binFlat    = binIdx(:);
 
-    linIdx = sub2ind([Naz, Nel, Nbin], azIdx(:), elIdx(:), binIdx(:));
-    % accumarray over a flat index space
-    counts_flat = stats.counts(:);
-    counts_flat = counts_flat + accumarray(linIdx, 1, [Naz*Nel*Nbin, 1]);
-    stats.counts = reshape(counts_flat, [Naz, Nel, Nbin]);
+    % Linear indices into the flat (NazNel x Nbin) reshape of stats.counts.
+    % Each (cell -> bin) pair appears at most once across the slice, so a
+    % direct subscripted-add updates each location exactly once.
+    linIdx     = (1:NazNel).' + NazNel .* (binFlat - 1);
+
+    countsFlat         = reshape(stats.counts, NazNel, Nbin);
+    countsFlat(linIdx) = countsFlat(linIdx) + 1;
+    stats.counts       = reshape(countsFlat, [Naz, Nel, Nbin]);
 
     stats.numMc = stats.numMc + 1;
 end
