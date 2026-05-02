@@ -12,7 +12,7 @@ matlab/
 ├── imt2020_single_element_pattern.m   single element gain (M.2101 Table 4)
 ├── imt2020_composite_pattern.m        composite array gain
 ├── imt_aas_bs_eirp.m                  conducted-power-to-EIRP mapping
-├── sample_aas_beam_direction.m        beam-pointing samplers (uniform/sector/fixed/list)
+├── sample_aas_beam_direction.m        beam-pointing samplers (uniform/sector/fixed/list/ue_sector)
 ├── update_eirp_histograms.m           streaming per-cell stats update
 ├── run_imt_aas_eirp_monte_carlo.m     MC driver, never stores the EIRP cube
 ├── eirp_percentile_maps.m             per-angle percentile maps from histograms
@@ -23,7 +23,8 @@ matlab/
 ├── demo_export_eirp_percentile_table.m demo for the percentile-table CSV
 ├── test_against_pycraf.m              optional pycraf cross-check via pyenv
 ├── test_aas_monte_carlo_eirp.m        MATLAB-only self tests
-└── test_export_eirp_percentile_table.m self tests for the table exporter
+├── test_export_eirp_percentile_table.m self tests for the table exporter
+└── test_ue_sector_sampler.m           self tests for the ue_sector beam sampler
 ```
 
 ## What was ported from pycraf
@@ -140,7 +141,7 @@ summary:
 run_all_tests
 ```
 
-`run_all_tests.m` adds `matlab/` to the path, runs the three test
+`run_all_tests.m` adds `matlab/` to the path, runs the four test
 functions below, and prints a single per-test summary line plus a final
 `pass / fail / skip / error` count. Skipped tests do not fail the suite.
 
@@ -152,7 +153,21 @@ These run with no Python dependency:
 addpath('matlab');
 test_aas_monte_carlo_eirp();          % antenna sanity + Monte Carlo stats
 test_export_eirp_percentile_table();  % p000..p100 table exporter
+test_ue_sector_sampler();             % UE-driven sector beam sampler
 ```
+
+`test_ue_sector_sampler` covers:
+
+* `ue_sector` returns azimuths inside `[sector_az - W/2, sector_az + W/2]`
+* `ue_sector` returns elevations equal to `atan2d(ue_height_m - bs_height_m, range_m)`
+* `uniform_area` produces a larger average BS-to-UE range than
+  `uniform_radius` over the same `[r_min_m, r_max_m]`
+* a fixed RNG seed produces repeatable UE-driven beam draws
+* the existing `uniform`, `sector`, `fixed`, and `list` sampler modes
+  still pass unchanged
+* the Monte Carlo runner accepts `mode='ue_sector'` without changing the
+  downstream histogram, CDF, percentile maps, exceedance maps, or
+  per-(az,el) percentile-table exporter behavior
 
 `test_aas_monte_carlo_eirp` covers:
 
@@ -225,6 +240,94 @@ If `pyenv`, Python, or pycraf is not available the test prints a clear
 `SKIP` message with the reason and does not fail the MATLAB-only test
 runs. Pycraf validation is **optional but recommended** for any change
 that touches the antenna math.
+
+## Beam-pointing samplers
+
+`sample_aas_beam_direction(opts)` is the only entry point for choosing the
+AAS beam pointing(s) used by every Monte Carlo iteration. It supports two
+families of sampling, controlled by `opts.mode`.
+
+### Direct beam-direction sampling
+
+The original modes draw beam azimuth / elevation directly, without any
+implicit UE geometry:
+
+| `opts.mode` | What it draws                                                                        |
+| ----------- | ------------------------------------------------------------------------------------ |
+| `uniform`   | `azim ~ U(opts.azim_range)`, `elev ~ U(opts.elev_range)`                             |
+| `sector`    | uniform within a 3-sector cell of width `opts.sector_az_width` centered on `opts.sector_az`; elevation uniform within `opts.elev_range` |
+| `fixed`     | deterministic `opts.azim_i` / `opts.elev_i` (useful for repeatability tests)         |
+| `list`      | uniform draws from `opts.azim_list` / `opts.elev_list`                               |
+
+In these modes the sampler does **not** know about the base-station height,
+the cell radius, or where any UE actually is - it just hands a `(beamAz,
+beamEl)` pair to the Monte Carlo engine.
+
+### UE-driven sector sampling (`ue_sector`)
+
+`mode = 'ue_sector'` is a higher-level wrapper that puts a randomized UE
+inside a sector and converts that UE into the beam pointing the BS would
+use:
+
+```matlab
+beamSampler.mode             = 'ue_sector';
+beamSampler.sector_az_deg    = 0;     % sector boresight azimuth   [deg]
+beamSampler.sector_width_deg = 120;   % sector opening             [deg]
+beamSampler.r_min_m          = 10;    % minimum BS-to-UE range     [m]
+beamSampler.r_max_m          = 500;   % maximum BS-to-UE range     [m]
+beamSampler.bs_height_m      = 25;    % base-station antenna AGL   [m]
+beamSampler.ue_height_m      = 1.5;   % UE antenna AGL             [m]
+beamSampler.numBeams         = 1;     % UEs (and beams) per draw
+
+% Optional distribution controls (defaults shown):
+beamSampler.radial_distribution = 'uniform_area';   % or 'uniform_radius'
+beamSampler.az_distribution     = 'uniform';
+beamSampler.elev_clip_deg       = [-90 90];
+```
+
+Geometry per UE:
+
+```
+beamAz_deg = sector_az_deg + uniform(-sector_width_deg/2, sector_width_deg/2)
+
+if radial_distribution == 'uniform_area':
+    r = sqrt( r_min_m^2 + rand() * (r_max_m^2 - r_min_m^2) )
+elif radial_distribution == 'uniform_radius':
+    r = r_min_m + rand() * (r_max_m - r_min_m)
+
+beamEl_deg = atan2d(ue_height_m - bs_height_m, r)
+```
+
+`uniform_area` makes UE locations uniformly distributed over the annulus
+between `r_min_m` and `r_max_m` (the natural choice when UEs are spread
+uniformly across the sector). `uniform_radius` weighs near-in radii more
+heavily and is mostly useful for sensitivity tests.
+
+The sampler optionally returns a third `dbg` struct with the underlying
+UE geometry, useful for plotting or debugging:
+
+```matlab
+[beamAz, beamEl, dbg] = sample_aas_beam_direction(beamSampler);
+% dbg.ueRange_m, dbg.ueAz_deg, dbg.ueEl_deg, dbg.ueX_m, dbg.ueY_m
+```
+
+In `ue_sector` mode, Monte Carlo draws randomized UE locations inside the
+sector, converts each UE to an AAS beam pointing direction, and then
+computes EIRP toward each fixed observation azimuth / elevation bin. The
+streaming histogram, percentile maps, exceedance maps and table exporter
+are all unchanged - the only thing that changes is how the per-iteration
+beam pointing is chosen.
+
+```matlab
+mcOpts.beamSampler = struct( ...
+    'mode', 'ue_sector', ...
+    'sector_az_deg', 0, 'sector_width_deg', 120, ...
+    'r_min_m', 10, 'r_max_m', 500, ...
+    'bs_height_m', 25, 'ue_height_m', 1.5, ...
+    'radial_distribution', 'uniform_area', ...
+    'numBeams', 1);
+stats = run_imt_aas_eirp_monte_carlo(cfg, mcOpts);
+```
 
 ## Per-(az,el) EIRP percentile table
 
