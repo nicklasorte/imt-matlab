@@ -13,11 +13,20 @@ function layout = generate_single_sector_layout(bs, params)
 %   The R23 single-sector slice fixes:
 %       horizontal coverage envelope :  +/- 60 deg from boresight
 %                                       (BS.sector_width_deg overrides)
-%       vertical coverage envelope   :  global theta 90..100 deg, i.e.
-%                                       elevation -10..0 deg
+%       vertical coverage envelope   :  R23 global theta 90..100 deg
+%                                       <=> internal elevation -10..0 deg
+%                                       (conversion: theta = 90 - elev)
 %       UE minimum distance          :  35 m (R23)
 %       UE height                    :  1.5 m (R23)
 %       cell radius                  :  400 m (urban) / 800 m (suburban)
+%
+%   The vertical envelope is exposed in BOTH conventions on the layout
+%   struct so downstream code can use whichever is natural without
+%   re-deriving the relationship:
+%       elLimitsDeg                    = [-10, 0]    internal elevation
+%       verticalCoverageGlobalThetaDeg = [90, 100]   R23 global theta
+%   These two fields are kept consistent by construction via
+%       verticalCoverageGlobalThetaDeg = 90 - flip(elLimitsDeg).
 %
 %   Inputs:
 %       BS      struct from get_default_bs (or an override).
@@ -33,7 +42,12 @@ function layout = generate_single_sector_layout(bs, params)
 %       sectorWidthDeg           sector horizontal coverage [deg]
 %       azLimitsDeg              [-min, +max] steering envelope [deg]
 %                                relative to boresight (R23: +/- 60)
-%       elLimitsDeg              [-10, 0] steering envelope [deg]
+%       elLimitsDeg              [-10, 0] internal elevation envelope
+%                                (0 deg = horizon, negative = downtilt)
+%       verticalCoverageGlobalThetaDeg
+%                                [90, 100] R23 global-theta envelope,
+%                                exposed alongside elLimitsDeg as the
+%                                explicit conversion (90 - elev)
 %       ueHeight_m               default UE height [m] (1.5)
 %       cellRadius_m             max UE ground range [m]
 %       minUeDistance_m          min UE ground range [m] (R23: 35)
@@ -88,6 +102,12 @@ function layout = generate_single_sector_layout(bs, params)
     layout.azLimitsDeg      = [-params.hCoverageDeg, params.hCoverageDeg];
     layout.elLimitsDeg      = [params.vCoverageDegGlobalMin - 90, ...
                                params.vCoverageDegGlobalMax - 90];
+    % Expose the R23 global-theta envelope explicitly so callers don't
+    % have to re-derive 90 - elev. By construction this stays consistent
+    % with elLimitsDeg (the conversion is monotonically decreasing, so
+    % the limits flip).
+    layout.verticalCoverageGlobalThetaDeg = ...
+        [params.vCoverageDegGlobalMin, params.vCoverageDegGlobalMax];
     layout.ueHeight_m       = 1.5;
     layout.cellRadius_m     = cellRadius_m;
     layout.minUeDistance_m  = 35;
