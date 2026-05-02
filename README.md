@@ -4,14 +4,29 @@ MATLAB implementation of the ITU-R Rec. M.2101-0 IMT-2020 Active-Antenna-System
 (AAS) base-station antenna / EIRP model, with a streaming Monte Carlo harness
 for per-direction EIRP statistics.
 
+Two pattern paths are supported:
+
+* the **simple M.2101 composite path** (`imt2020_composite_pattern.m`),
+  unchanged - this is what the existing `pycraf` parity tests cover at
+  `1e-6 dB` tolerance, and
+* a new **R23 7.125-8.4 GHz Extended AAS path**
+  (`imt2020_composite_pattern_extended.m` +
+  `imt_r23_aas_defaults.m` + `imt_r23_aas_eirp_grid.m`) for the macro
+  base-station configuration described below.
+
 ## Layout
 
 ```
 run_all_tests.m                        single entry point for the test suite
 matlab/
 ├── imt2020_single_element_pattern.m   single element gain (M.2101 Table 4)
-├── imt2020_composite_pattern.m        composite array gain
-├── imt_aas_bs_eirp.m                  conducted-power-to-EIRP mapping
+├── imt2020_composite_pattern.m        composite array gain (simple M.2101)
+├── imt2020_composite_pattern_extended.m R23 extended AAS composite (sub-array + tilt)
+├── imt_aas_mechanical_tilt_transform.m  sector->panel y-axis rotation
+├── imt_r23_aas_defaults.m             R23 7/8 GHz macro AAS configuration
+├── imt_r23_aas_eirp_grid.m            deterministic R23 EIRP grid
+├── demo_r23_aas_eirp_grid.m           R23 EIRP grid demo
+├── imt_aas_bs_eirp.m                  conducted-power-to-EIRP mapping (M.2101 + R23)
 ├── sample_aas_beam_direction.m        beam-pointing samplers (uniform/sector/fixed/list/ue_sector)
 ├── update_eirp_histograms.m           streaming per-cell stats update
 ├── run_imt_aas_eirp_monte_carlo.m     MC driver, never stores the EIRP cube
@@ -26,6 +41,8 @@ matlab/
 ├── test_aas_monte_carlo_eirp.m        MATLAB-only self tests
 ├── test_export_eirp_percentile_table.m self tests for the table exporter
 ├── test_ue_sector_sampler.m           self tests for the ue_sector beam sampler
+├── test_r23_aas_defaults.m            self tests for the R23 7/8 GHz defaults
+├── test_r23_extended_aas_eirp.m       self tests for the R23 extended AAS path
 ├── estimate_aas_mc_memory.m           memory estimator for hist / pctile / CSV
 ├── profile_aas_monte_carlo_runtime.m  runtime profiler + full-grid extrapolation
 └── test_runtime_scaling_controls.m    self tests for chunking / memory / progress
@@ -77,6 +94,141 @@ Annex 1 / Table 4 specifies:
 The MATLAB code uses the same symbol names and units throughout, so
 M.2101 readers can step from the document into the source one-to-one.
 
+## R23 7/8 GHz Extended AAS
+
+The R23 macro base-station AAS for the 7.125-8.4 GHz IMT band uses an
+*extended* composite pattern: each cell of the horizontal x vertical
+sub-array grid contains a fixed-downtilt vertical sub-array, and the
+whole panel is mechanically downtilted. Three new files implement this
+on top of the existing single-element pattern:
+
+| file | role |
+| ---- | ---- |
+| `imt_r23_aas_defaults.m`             | reference R23 configuration struct |
+| `imt_aas_mechanical_tilt_transform.m`| sector-frame -> panel-frame y-axis rotation |
+| `imt2020_composite_pattern_extended.m` | composite gain with sub-array + mechanical tilt |
+| `imt_r23_aas_eirp_grid.m`             | deterministic per-direction EIRP grid |
+
+The original simple M.2101 path (`imt2020_composite_pattern.m`) is
+unchanged. The strict pycraf parity tests (`test_against_pycraf`,
+`test_against_pycraf_strict`) still cover that path at `1e-6 dB`.
+
+### Reference configuration
+
+`imt_r23_aas_defaults('macroUrban')` (or `'macroSuburban'`) returns:
+
+| field                              | value                  |
+| ---------------------------------- | ---------------------- |
+| `frequencyMHz`                     | `8000`                 |
+| `bandwidthMHz`                     | `100`                  |
+| `sectorEirp_dBm_per100MHz`         | `78.3`                 |
+| `peakGain_dBi`                     | `32.2`                 |
+| `txPower_dBm`                      | `46.1`                 |
+| `feederLoss_dB`                    | `0`                    |
+| `G_Emax`                           | `6.4` (incl. 2 dB ohmic) |
+| `phi_3db, theta_3db`               | `90, 65`               |
+| `A_m, SLA_nu`                      | `30, 30`               |
+| `N_V x N_H` (rows x cols)          | `8 x 16`               |
+| `d_H, d_V` (sub-array spacing)     | `0.5, 2.1` wavelengths |
+| `subarray.numVerticalElements`     | `3`                    |
+| `subarray.d_V`                     | `0.7` wavelengths      |
+| `subarray.downtiltDeg`             | `3`                    |
+| `mechanicalDowntiltDeg`            | `6`                    |
+| `bsHeight_m` (macroUrban / macroSuburban) | `18` / `20`     |
+| `numSectors`, `sectorAzimuthsDeg`  | `3`, `[0 120 240]`     |
+| `horizontalCoverageDeg`            | `60` (+/-)             |
+
+> The R23 row x column = 8 x 16 array maps to `N_V = 8` (vertical sub-
+> arrays / rows) and `N_H = 16` (horizontal columns) in the repo's array
+> factor convention.
+
+UE / network metadata (UEs per sector, UE antenna gain, body loss, TDD
+activity factors, PCMAX, P0_PUSCH, alpha, network loading factors) are
+attached to `cfg` for downstream use but are **not** consumed by this
+EIRP-only step.
+
+### Math
+
+Mechanical downtilt is a single y-axis rotation of the observation and
+beam directions before the antenna math is evaluated:
+
+```
+v        = [cos(EL)*cos(AZ); cos(EL)*sin(AZ); sin(EL)]
+v_panel  = Ry(tiltDownDeg) * v
+AZ_panel = atan2d(v_panel.y, v_panel.x)   wrapped to [-180, 180]
+EL_panel = asind(v_panel.z)
+```
+
+So a sector-frame direction at `(0, -tiltDownDeg)` lands at panel
+`(0, 0)`. The N_H x N_V sub-array array factor is identical to the
+simple M.2101 form, evaluated in the panel frame; the new piece is the
+fixed-downtilt vertical sub-array of `L = numVerticalElements` elements
+with internal spacing `dSub` wavelengths and steering elevation
+`-thetaSub`:
+
+```
+argSub(l) = 2*pi * l * dSub * ( cos(theta_panel) + sin(thetaSub) )
+AFsub     = | sum_l exp(j*argSub(l)) |^2 / L
+```
+
+The full extended composite is
+
+```
+A_ext = A_E + 10*log10( 1 + rho*(AF_array - 1) ) + 10*log10(AFsub)
+```
+
+with the same `A_E`, `phi`, `theta`, and `theta_i = -elev_i` conventions
+as the simple path.
+
+Setting `cfg.normalizeToPeakGain = true` (the default) renormalises the
+raw extended gain so the panel-frame main-lobe peak equals
+`cfg.peakGain_dBi` exactly:
+
+```
+gain_dBi = rawGain_dBi - rawPeak_dBi + cfg.peakGain_dBi
+```
+
+`rawPeak_dBi` is the raw extended gain evaluated at the (panel-frame)
+beam direction.
+
+### EIRP grid
+
+```matlab
+addpath('matlab');
+cfg = imt_r23_aas_defaults('macroUrban');
+out = imt_r23_aas_eirp_grid(-180:1:180, -90:1:30, cfg);
+% out.gain_dBi              [Naz x Nel]   composite gain [dBi]
+% out.eirp_dBm_per100MHz    [Naz x Nel]   EIRP per 100 MHz [dBm]
+% out.eirp_dBW_perHz        [Naz x Nel]   EIRP spectral density [dBW/Hz]
+%   = eirp_dBm_per100MHz - 30 - 10*log10(cfg.bandwidthMHz * 1e6)
+```
+
+The default beam pointing places the peak at the combined sub-array +
+mechanical downtilt direction, i.e. `(azim_i, elev_i) = (0, -9)` for the
+R23 defaults. With those defaults the grid peaks at exactly
+`78.3 dBm/100 MHz` (= `46.1 + 32.2`) on directions where the panel-frame
+main lobe lands.
+
+`demo_r23_aas_eirp_grid.m` runs end-to-end and produces an EIRP map.
+
+### Scope of this step
+
+This is a deterministic / Monte-Carlo-compatible **base-station EIRP
+grid only**. It does *not* implement:
+
+* free-space or terrain path loss
+* clutter loss
+* FS / FSS victim antennas
+* frequency-dependent rejection (FDR)
+* network aggregation across base stations
+* I/N or SEAMCAT-style aggregate compatibility
+
+`run_imt_aas_eirp_monte_carlo` accepts the R23 cfg without modification
+- the per-iteration beam pointing is drawn by
+`sample_aas_beam_direction`, the per-direction EIRP is computed via
+`imt_aas_bs_eirp(..., cfg)` (which dispatches on `cfg.patternModel`), and
+the streaming histogram update is unchanged.
+
 ## Angle conventions
 
 Matched to pycraf:
@@ -108,9 +260,6 @@ Matched to pycraf:
 * Only the M.2101 base-station AAS antenna and EIRP piece is implemented.
   No path loss, no SINR, no scheduling, no UE mobility, no aggregation
   across multiple base stations, no spurious-domain scaling.
-* The `imt2020_composite_pattern_extended` (sub-array / electronic
-  downtilt) variant from pycraf is *not* ported - it was not requested
-  in the task scope.
 * The IMT advanced (LTE) sectoral peak / average side-lobe patterns
   from F.1336 are not ported.
 * No GPU / parallel acceleration is built in. `parfor` can be wrapped
