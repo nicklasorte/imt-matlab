@@ -65,7 +65,7 @@ different naming conventions and serve different purposes:
 
 | API | Naming | Entry points | Purpose |
 | --- | --- | --- | --- |
-| Original / Monte Carlo | `imt2020_*`, `imt_aas_*`, `imt_r23_aas_*` (snake_case) | `imt_aas_bs_eirp`, `run_imt_aas_eirp_monte_carlo`, `imt_r23_aas_eirp_grid`, `run_embrss_eirp_cdf_grid` | Streaming Monte Carlo, percentile/exceedance maps, EMBRSS CDF-grid driver |
+| Original / Monte Carlo | `imt2020_*`, `imt_aas_*`, `imt_r23_aas_*` (snake_case) | `imt_aas_bs_eirp`, `run_imt_aas_eirp_monte_carlo`, `imt_r23_aas_eirp_grid`, `run_embrss_eirp_cdf_grid` | Streaming Monte Carlo, percentile/exceedance maps, CDF-grid driver |
 | AAS-01/AAS-02 export | `imtAas*` (camelCase) | `imtAasEirpGrid`, `imtAasCompositeGain`, `imtAasDefaultParams`, `imtAasExportEirpGridCsv` | Deterministic per-(az,el) EIRP grid + CSV/PNG/JSON export for validation |
 
 The Monte Carlo runner dispatches on `cfg.patternModel` (`'m2101'` vs
