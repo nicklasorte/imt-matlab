@@ -229,6 +229,103 @@ grid only**. It does *not* implement:
 `imt_aas_bs_eirp(..., cfg)` (which dispatches on `cfg.patternModel`), and
 the streaming histogram update is unchanged.
 
+## Exporting the R23 AAS EIRP grid
+
+`examples/runAasEirpValidationExport.m` is the AAS-02 validation /
+export layer on top of the AAS-01 sector-EIRP grid (PR #10). It builds
+the deterministic R23 macro AAS antenna-face EIRP distribution for the
+nominal (broadside, -9 deg) beam, plots the grid plus horizontal /
+vertical 1-D cuts, and writes a long-form CSV with a JSON metadata
+sidecar. It does **not** model path loss, receiver geometry, or
+coordination - the payload is *antenna-face EIRP only*.
+
+### How to run
+
+```matlab
+addpath('matlab');
+runAasEirpValidationExport
+```
+
+(or `cd examples; runAasEirpValidationExport`).
+
+The example uses the AAS-01 default grid:
+
+```
+azGridDeg  = -180:1:180;
+elGridDeg  =  -90:1:90;
+steerAzDeg =  0;
+steerElDeg = -9;
+```
+
+and the R23 reference parameters from `imtAasDefaultParams()` (8 x 16
+sub-array layout, 3 vertical elements per sub-array, 0.7 lambda
+intra-sub-array spacing, 2.1 lambda sub-array spacing, 0.5 lambda
+horizontal spacing, 3 deg sub-array downtilt, 6 deg mechanical downtilt,
+6.4 dBi element gain). The peak EIRP of the grid is **78.3 dBm /
+100 MHz**, matching the R23 macro reference.
+
+### Where artifacts are written
+
+All under `examples/output/`:
+
+| file | content |
+| ---- | ------- |
+| `aas_eirp_grid_r23_macro.csv`               | long-form `az_deg, el_deg, eirp_dbm_per_100mhz`, one row per (az, el) cell |
+| `aas_eirp_grid_r23_macro_metadata.json`     | sidecar metadata (params + steering + notes); plain-text fallback if `jsonencode` is unavailable |
+| `aas_eirp_grid_r23_macro.png`               | EIRP heatmap (2-D az/el) |
+| `aas_eirp_horizontal_cut_r23_macro.png`     | horizontal cut at the steering elevation |
+| `aas_eirp_vertical_cut_r23_macro.png`       | vertical cut at the steering azimuth |
+
+`imtAasExportEirpGridCsv` uses base MATLAB only; PNG export uses
+`exportgraphics` when available and falls back to `saveas` otherwise.
+
+### Files added in this slice
+
+| file | role |
+| ---- | ---- |
+| `matlab/imtAasPatternCuts.m`             | nearest-grid horizontal / vertical 1-D cuts + peak summary |
+| `matlab/imtAasExportEirpGridCsv.m`       | long-form CSV + JSON / text metadata sidecar |
+| `matlab/plotImtAasPatternCuts.m`         | two-figure plot of the cuts |
+| `examples/runAasEirpValidationExport.m`  | end-to-end validation / export driver |
+| `matlab/test_imtAasValidationExport.m`   | self tests, wired into `run_all_tests` |
+
+### Angle convention
+
+* `az_deg`  - azimuth relative to sector boresight; positive to the
+  left of boresight, range `[-180, 180]`. `0 deg` is the sector
+  boresight.
+* `el_deg`  - elevation relative to the horizon; range `[-90, 90]`.
+  `0 deg` is the horizon. **Negative elevation means downtilt /
+  below the horizon**, so the nominal R23 main beam at -9 deg sits
+  below the horizon as expected.
+* The mechanical downtilt and sub-array downtilt are applied internally
+  by `imtAasCompositeGain` / `imtAasEirpGrid`; the export uses the
+  sector-frame angles as written above.
+
+### Scope (what this slice is NOT)
+
+This is labelled a **deterministic R23 macro AAS MVP export**. It is
+intentionally limited to one base-station sector's antenna-face EIRP
+distribution. It does **not** implement, and does not claim equivalence
+with:
+
+* IMT laydown / UE laydown
+* path loss / propagation models
+* receiver I / N
+* CDF / CCDF aggregation
+* coordination distance
+* FS / FSS receiver logic
+* full ITU-R M.2101 / pycraf parity (separate strict tests cover the
+  simple M.2101 path; the extended R23 path is not bit-equivalent)
+
+The peak normalization is preserved from AAS-01:
+
+```
+eirpGridDbm = sectorEirpDbm + compositeGainDbi - max(compositeGainDbi(:))
+```
+
+so `max(eirpGridDbm(:)) == sectorEirpDbm == 78.3 dBm / 100 MHz` exactly.
+
 ## EMBRSS-style EIRP CDF-grid first step
 
 `run_embrss_eirp_cdf_grid(category, opts)` is the first step of an
