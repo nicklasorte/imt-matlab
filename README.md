@@ -521,6 +521,92 @@ receiver, no I / N, no CDF / CCDF aggregation, no multi-site / 19-site
 cluster, no IMT / UE scheduling, no FS / FSS receiver geometry, and no
 coordination-distance logic.
 
+## UE-driven sector EIRP grid
+
+`examples/runAasUeDrivenSectorEirpGrid.m` combines the antenna-face
+EIRP model with the AAS-04 UE-driven beam generator to produce the
+**sector-level EIRP distribution** when one IMT AAS macro sector is
+simultaneously serving `N_UE` UEs. The pipeline is:
+
+```
+UE geometry  ->  beam (az, el)  ->  per-beam EIRP grids  ->  aggregate sector EIRP grid
+imtAasSampleUePositions
+imtAasUeToBeamAngles
+imtAasApplyBeamLimits     imtAasEirpGrid     imtAasSectorEirpGridFromBeams
+```
+
+### How to run
+
+```matlab
+addpath('matlab');
+runAasUeDrivenSectorEirpGrid
+```
+
+(or `cd examples; runAasUeDrivenSectorEirpGrid`).
+
+The driver prints `numBeams`, `sectorEirpDbm`, `perBeamPeakEirpDbm`,
+the peak aggregate / envelope EIRP, and a per-beam steering table; it
+saves PNG heatmaps and CSV exports under `examples/output/`.
+
+### Power semantics (R23 macro 7.125-8.4 GHz)
+
+`imtAasDefaultParams` carries the R23 power split explicitly:
+
+| field                                       | value | meaning |
+| ------------------------------------------- | ----- | ------- |
+| `txPowerDbmPer100MHz`                       | 46.1  | conducted BS transmit power [dBm / 100 MHz] |
+| `peakGainDbi`                               | 32.2  | peak composite antenna gain [dBi] |
+| `sectorEirpDbm`                             | 78.3  | **sector peak** EIRP [dBm / 100 MHz] (= 46.1 + 32.2) |
+| `numUesPerSector`                           | 3     | simultaneously served UEs per sector |
+| `sectorEirpIncludesTwoPolarizations`        | true  | sector EIRP sums both orthogonal polarizations |
+| `elementGainIncludesOhmicLoss`              | true  | the 6.4 dBi element gain already absorbs the 2 dB ohmic loss |
+| `defaultSplitSectorPowerAcrossBeams`        | true  | per-beam peak EIRP = sectorEirpDbm - 10*log10(numBeams) |
+
+Key point: **78.3 dBm / 100 MHz is the sector peak EIRP, not a
+per-simultaneous-beam allowance.** A single reference beam may peak at
+the full 78.3 dBm / 100 MHz, but in a 3-UE simultaneous snapshot the
+sector power is split across the three BS-UE links:
+
+```
+perBeamPeakEirpDbm = sectorEirpDbm - 10*log10(numBeams)
+                   = 78.3 - 10*log10(3)
+                   ~ 73.53 dBm / 100 MHz
+```
+
+The aggregate sector EIRP grid is built by linear-mW power summation
+over the per-beam EIRP grids:
+
+```
+aggregateEirpDbm = 10*log10(sum(10.^(perBeamEirpDbm / 10), 3))
+```
+
+When the three simultaneous beams point in identical directions, the
+aggregate peak EIRP returns to ~78.3 dBm / 100 MHz (three -4.77 dB
+peaks summing in linear power). When the beams point in different
+directions, the aggregate peak is below 78.3 dBm / 100 MHz because each
+beam contributes its own steered main lobe.
+
+`maxEnvelopeEirpDbm` (the per-cell `max` over beams) is the
+worst-direction envelope - it is **not** the aggregate; for the split
+path its peak equals `perBeamPeakEirpDbm` exactly.
+
+### Files added in this slice
+
+| file | role |
+| ---- | ---- |
+| `matlab/imtAasSectorEirpGridFromBeams.m`        | aggregate sector EIRP grid from a beam set (linear-mW sum) |
+| `matlab/imtAasCreateDefaultSectorEirpGrid.m`    | one-shot helper (defaults + UE-driven beams + aggregate grid) |
+| `matlab/plotImtAasSectorEirpGrid.m`             | aggregate / envelope / per-beam heatmaps |
+| `examples/runAasUeDrivenSectorEirpGrid.m`       | end-to-end demo + CSV / PNG export |
+| `matlab/test_imtAasSectorEirpGridFromBeams.m`   | self tests, wired into `run_all_tests` |
+
+### Scope (what this slice is NOT)
+
+This is **antenna-face EIRP only**. No path loss, no receiver antenna
+gain, no I / N, no CDF / CCDF, no coordination-distance logic, no TDD
+activity factor, no network loading factor, no multi-site / 19-site
+cluster, no FS / FSS receiver geometry, and no IMT / UE scheduling.
+
 ## EMBRSS-style EIRP CDF-grid first step
 
 `run_embrss_eirp_cdf_grid(category, opts)` is the first step of an
