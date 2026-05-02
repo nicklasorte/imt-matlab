@@ -44,6 +44,18 @@ function params = imtAasDefaultParams()
 %   * The 6.4 dBi element gain already absorbs the R23 reference 2 dB ohmic
 %     / array loss, so no additional loss term is applied downstream
 %     (matching imt_r23_aas_defaults).
+%   * Power semantics (R23 macro reference, 7.125-8.4 GHz):
+%       txPowerDbmPer100MHz = 46.1     conducted BS transmit power
+%       peakGainDbi         = 32.2     peak composite antenna gain
+%       sectorEirpDbm       = 78.3     46.1 + 32.2 = 78.3 dBm / 100 MHz
+%     78.3 dBm / 100 MHz is the SECTOR PEAK EIRP (single fully-formed beam,
+%     two orthogonal polarizations summed). It is NOT a per-simultaneous-
+%     beam allowance: when the sector serves multiple simultaneous UEs, the
+%     sector power must be split across the simultaneous BS-UE links. See
+%     imtAasSectorEirpGridFromBeams for the per-beam split.
+%   * elementGainIncludesOhmicLoss = true reflects the fact that the 6.4 dBi
+%     element gain already absorbs the R23 reference 2 dB ohmic loss; do
+%     NOT subtract it again downstream.
 
     params = struct();
 
@@ -75,9 +87,21 @@ function params = imtAasDefaultParams()
     params.vCoverageDegGlobalMax       = 100;      % global theta 10 deg below
 
     % ---- band / EIRP --------------------------------------------------
-    params.sectorEirpDbm               = 78.3;     % per 100 MHz
+    params.sectorEirpDbm               = 78.3;     % per 100 MHz, sector peak
     params.bandwidthMHz                = 100;
     params.frequencyMHz                = 8000;
+
+    % ---- explicit R23 power semantics ---------------------------------
+    %   46.1 dBm conducted + 32.2 dBi peak gain = 78.3 dBm sector peak EIRP
+    %   per 100 MHz. The 6.4 dBi element gain already includes the 2 dB
+    %   ohmic loss; do not subtract it again downstream. Sector EIRP
+    %   includes power from two orthogonal polarizations.
+    params.peakGainDbi                          = 32.2;
+    params.txPowerDbmPer100MHz                  = 46.1;
+    params.numUesPerSector                      = 3;
+    params.sectorEirpIncludesTwoPolarizations   = true;
+    params.elementGainIncludesOhmicLoss         = true;
+    params.defaultSplitSectorPowerAcrossBeams   = true;
 
     % ---- M.2101 recombination knobs -----------------------------------
     params.k   = 12;
