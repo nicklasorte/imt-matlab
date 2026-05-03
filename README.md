@@ -99,6 +99,35 @@ Annex 1 / Table 4 specifies:
 The MATLAB code uses the same symbol names and units throughout, so
 M.2101 readers can step from the document into the source one-to-one.
 
+## Vertical Angle Conventions
+
+The implementation uses **internal elevation** throughout all antenna and
+beam computations:
+
+* **Internal elevation (`elDeg`)**: 0° at the horizon, negative values
+  below the horizon (downtilt). This is the convention used internally
+  by all antenna pattern functions and beam steering.
+* **R23 global theta (`thetaGlobalDeg`)**: The M.2101 global-theta
+  convention where 90° is the horizon and 100° is 10° below the horizon.
+* **Conversion**: `thetaGlobalDeg = 90 - elDeg` (one-to-one, verified by
+  tests).
+
+The R23 source vertical coverage is **global theta 90°–100°**, which
+corresponds to internal elevation **−10°–0°**. The code exposes both
+representations side-by-side in key functions:
+
+* `compute_beam_angles_bs_to_ue.m`: returns both `rawElDeg` and
+  `rawThetaGlobalDeg`
+* `clamp_beam_to_r23_coverage.m`: returns both `steerElDeg`,
+  `steerThetaGlobalDeg`, and `thetaGlobalLimitsDeg`
+* `generate_single_sector_layout.m`: exposes both `elLimitsDeg` and
+  `verticalCoverageGlobalThetaDeg`
+
+This dual representation allows consumers to use whichever convention is
+natural for their context without re-deriving the conversion. The
+relationship is enforced by `test_single_sector_eirp_mvp` test S14
+(vertical-convention contract).
+
 ## R23 7/8 GHz Extended AAS
 
 The R23 macro base-station AAS for the 7.125-8.4 GHz IMT band uses an
