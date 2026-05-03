@@ -1016,6 +1016,42 @@ It is wired into `run_all_tests` after
 `test_r23_mvp_acceptance_contract`, so `run_all_tests` covers it
 automatically.
 
+### Deterministic EIRP power-normalization tests
+
+`test_r23_eirp_power_normalization` is a small set of deterministic
+checks that pin the R23 single-sector MVP power-accounting contract.
+Like the ground-truth geometry tests, it uses fixed UE / grid setups
+and no Monte Carlo, so a broken power split or beam-aggregation rule
+cannot pass.
+
+It verifies:
+
+* **Sector EIRP override behaviour**: with a single-UE single-cell
+  aligned setup, dropping `bs.eirp_dBm_per_100MHz` from `78.3` to
+  `75.0` shifts the aligned aggregate EIRP by exactly `-3.3` dB and
+  does not mutate `get_default_bs()` defaults.
+* **Equal split across 3 UE beams**: with `splitSectorPower = true`
+  and three UEs, `perBeamPeakEirpDbm == sectorEirpDbm - 10*log10(3)`.
+* **Linear aggregation across simultaneous beams**: three identical
+  aligned beams each carrying `1/3` of the sector budget linearly
+  add back to the full sector EIRP at the aligned cell, matching the
+  no-split single-beam aligned EIRP within numerical tolerance.
+* **Aggregate EIRP vs. max-envelope EIRP**: for three UEs at distinct
+  azimuths inside the `+/- 60` deg sector, `aggregateEirpDbm >=
+  maxEnvelopeEirpDbm` holds at every grid cell (within fp tolerance),
+  because the aggregate is the linear-mW sum across beams.
+
+How to run:
+
+```matlab
+addpath('matlab');
+test_r23_eirp_power_normalization
+```
+
+It is wired into `run_all_tests` after
+`test_r23_ground_truth_antenna_geometry`, so `run_all_tests` covers
+it automatically.
+
 ## Angle conventions
 
 Matched to pycraf:
