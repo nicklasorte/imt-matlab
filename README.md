@@ -1095,6 +1095,50 @@ It is wired into `run_all_tests` after
 `test_r23_eirp_power_normalization`, so `run_all_tests` covers it
 automatically.
 
+### Monte Carlo and CDF validation
+
+`test_r23_monte_carlo_and_cdf` is a lightweight suite that pins the
+statistical contracts of `run_monte_carlo_snapshots` /
+`sample_ue_positions_in_sector` / `compute_cdf_per_grid_point`. It uses
+small grids and modest snapshot counts so it stays fast in
+`run_all_tests`. It does NOT introduce path loss, FS / FSS modeling,
+interference aggregation, or multi-site scaling - it only validates the
+existing antenna-face Monte Carlo + CDF pipeline.
+
+It verifies:
+
+* **Deterministic reproducibility**: two runs with the same `seed`
+  produce a bit-equal `eirpGrid` (no hidden RNG, no per-call reseed
+  drift).
+* **Variability sanity**: two runs with different seeds produce
+  different cubes, while the per-cell linear-mW mean EIRP stays within
+  a small tolerance (the underlying physics is unchanged).
+* **UE sampling sanity**: across many snapshots every drawn UE stays
+  inside the R23 sector (`>= minUeDistance_m`, `<= cellRadius_m`,
+  `|azRel| <= hCoverageDeg`), the antenna height stays at 1.5 m, and
+  the (x, y) population is non-degenerate.
+* **CDF monotonicity**: per-cell empirical CDFs are non-decreasing,
+  end exactly at 1, start above 0, and contain no NaNs / Infs.
+* **CDF shape sanity**: at the boresight + nominal R23 downtilt cell
+  the EIRP distribution spans a non-trivial range, so a Monte Carlo
+  loop that has accidentally collapsed to a single deterministic
+  snapshot is caught.
+* **Output dimension consistency**: `eirpGrid` has shape
+  `[Naz, Nel, numSnapshots]`, percentile maps have shape
+  `[Naz, Nel, numel(percentiles)]`, and the per-cell mean / min / max
+  reductions have shape `[Naz, Nel]`.
+
+How to run:
+
+```matlab
+addpath('matlab');
+test_r23_monte_carlo_and_cdf
+```
+
+It is wired into `run_all_tests` after
+`test_r23_grid_rotation_symmetry`, so `run_all_tests` covers it
+automatically.
+
 ## Angle conventions
 
 Matched to pycraf:
