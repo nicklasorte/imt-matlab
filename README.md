@@ -951,12 +951,12 @@ What it locks down:
   `fsReceiver`, `fssReceiver`, `victimReceiver`,
   `interferenceAggregation`, `nineteenSite`, `fiftySevenSector`,
   `numSites = 19`, `numSectors = 57`).
-* **Legacy hygiene**: best-effort repo-wide scan finds no `EMBRSS` /
-  `embrss` / `Embrss` occurrences. The shell equivalent is
-
-  ```sh
-  grep -RIn "EMBRSS\|embrss\|Embrss" .
-  ```
+* **Legacy hygiene**: best-effort repo-wide scan finds no occurrences
+  of the legacy project-specific token (any casing). The check
+  constructs the literal token indirectly inside the test so this
+  README and the test source itself stay clean of the token. To verify
+  locally, run a case-insensitive `grep` for the legacy token across
+  the repo - it should return zero matches.
 
 How to run:
 

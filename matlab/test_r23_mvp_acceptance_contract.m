@@ -30,7 +30,9 @@ function results = test_r23_mvp_acceptance_contract()
 %            files refuses out-of-scope tokens (path loss, clutter, FS /
 %            FSS / victim receiver, 19-site / 57-sector aggregation, ...).
 %       C7.  Legacy-reference hygiene: repo-wide best-effort scan finds
-%            no occurrence of "EMBRSS" (any case).
+%            no occurrence of the legacy project-specific token (any
+%            case). The token is constructed indirectly at run time so
+%            this source file stays clean of the literal.
 %
 %   Exit contract: RESULTS is a struct with fields .summary (cellstr) and
 %   .passed (logical), matching the convention used by run_all_tests.m.
@@ -388,27 +390,34 @@ end
 
 % =====================================================================
 function r = c7_legacy_reference_hygiene(r)
-%C7 Best-effort repo-wide scan for legacy "EMBRSS" tokens.
+%C7 Best-effort repo-wide scan for the legacy project-specific token.
 %
-%   This is implemented as a directory walk under the repo root. If the
-%   walk hits an unreadable file we treat it as a soft-skip and report
-%   the limitation in the summary. The shell equivalent is:
-%       grep -RIn "EMBRSS\|embrss\|Embrss" .
+%   The literal token is intentionally NOT spelled out anywhere in this
+%   file (or in the README), so the hygiene check does not falsely fire
+%   on its own source. The needle is constructed at run time from two
+%   substrings and lower-cased; the scan is case-insensitive because the
+%   walker lower-cases file contents before comparing.
+%
+%   Implemented as a directory walk under the repo root. If the walk
+%   hits an unreadable file we treat it as a soft-skip and report the
+%   limitation in the summary.
 
-    repoRoot = mvp_repo_root();
-    needles  = {'embrss'};
-    skipDirs = {'.git', 'node_modules'};
+    repoRoot     = mvp_repo_root();
+    legacyToken  = lower(['EMB' 'RSS']);
+    needles      = {legacyToken};
+    skipDirs     = {'.git', 'node_modules'};
 
     [hits, walkErr] = scan_repo_for_tokens(repoRoot, needles, skipDirs);
     ok = isempty(hits);
     if ok && isempty(walkErr)
-        msg = 'C7: no EMBRSS / embrss / Embrss occurrences in repo';
+        msg = 'C7: no legacy project-specific token occurrences in repo';
     elseif ok && ~isempty(walkErr)
         msg = sprintf( ...
-            'C7: no EMBRSS occurrences (walk had %d soft skips: %s)', ...
+            ['C7: no legacy project-specific token occurrences ' ...
+             '(walk had %d soft skips: %s)'], ...
             numel(walkErr), strjoin(walkErr, '; '));
     else
-        msg = sprintf('C7: EMBRSS hit(s): %s', ...
+        msg = sprintf('C7: legacy project-specific token hit(s): %s', ...
             strjoin(hits, ' | '));
     end
     r = check(r, ok, msg);
