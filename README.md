@@ -1192,6 +1192,46 @@ test_r23_mvp_runtime_memory_guardrails
 It is wired into `run_all_tests` after `test_r23_monte_carlo_and_cdf`,
 so `run_all_tests` covers it automatically.
 
+### Streaming-vs-full-cube equivalence
+
+`test_r23_streaming_vs_full_cube_equivalence` is a small deterministic
+cross-check between the two parallel R23 single-sector EIRP runners:
+
+* the **full-cube path** (`run_monte_carlo_snapshots` ->
+  `compute_cdf_per_grid_point`) is used for **small validation** runs
+  where the per-snapshot `Naz x Nel x numSnapshots` cube fits in RAM
+  and the AAS-01 contract requires exposing the raw cube, and
+* the **streaming path** (`runR23AasEirpCdfGrid` ->
+  `update_eirp_histograms` -> `eirp_percentile_maps`) is used for
+  **larger runs** where the cube would exceed `maxCubeMiB` and only the
+  per-cell histogram aggregator is kept.
+
+Both runners share the same antenna primitives (`imtAasEirpGrid`), the
+same UE sampler (`imtAasSampleUePositions`), and the same R23 power
+budget (`78.3 dBm / 100 MHz` sector peak, split across `numBeams`
+simultaneous beams when `splitSectorPower = true`). The equivalence
+test runs a 7 x 5 grid with 10 draws / 3 beams / fixed seed through
+both runners and checks:
+
+* identical `(az, el)` grids, `numDraws`, `numBeams`,
+  `splitSectorPower`, `sectorEirpDbm`, and `perBeamPeakEirpDbm`
+* per-cell linear-mW mean EIRP maps within `1e-3 dB`
+* per-cell percentile maps within the streaming-path histogram bin
+  width (the streaming path returns bin midpoints, the full-cube path
+  interpolates raw sorted EIRP values, so this is the irreducible
+  discretisation gap)
+* outputs are finite and the right shape on both sides
+
+Run it directly with:
+
+```matlab
+addpath('matlab');
+test_r23_streaming_vs_full_cube_equivalence
+```
+
+It is wired into `run_all_tests` after
+`test_r23_mvp_runtime_memory_guardrails`.
+
 ## Angle conventions
 
 Matched to pycraf:
