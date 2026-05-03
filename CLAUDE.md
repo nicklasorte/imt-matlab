@@ -174,3 +174,49 @@ and adding them is out of scope unless the task explicitly asks:
   These invariants tend to catch subtle aggregator bugs — keep them.
 - This is **not ITU-certified**. Cross-check against M.2101 and 3GPP TR
   37.840 before using results in regulatory contexts.
+
+## MATLAB EXECUTION REQUIREMENT
+
+Future Claude Code / MATLAB MCP runs MUST follow this protocol.
+
+Use the MATLAB MCP tool if available.
+
+Before editing:
+
+- Check that MATLAB MCP is connected.
+- Check that MATLAB can see the repo.
+- Add the repo and `matlab/` folder to the MATLAB path if needed.
+
+After editing, run:
+
+- `run_all_tests`
+
+If a focused test was added, also run that test directly.
+
+If MATLAB MCP is unavailable or MATLAB cannot run, do NOT claim tests
+passed. State clearly:
+
+- MATLAB MCP unavailable, or MATLAB execution failed
+- the exact error
+- which tests were not run
+
+Do not skip failing tests. Do not loosen assertions just to pass. Fix
+only the failing implementation or test issue.
+
+### Readiness report
+
+`generate_r23_mvp_readiness_report` is a one-command readiness artifact
+for the R23 MVP. It runs `run_all_tests` and writes
+`reports/r23_mvp_readiness_report.md`. Run it after substantive R23 MVP
+changes:
+
+```matlab
+addpath('matlab');
+generate_r23_mvp_readiness_report();
+```
+
+If MATLAB is unavailable:
+
+- perform static inspection only
+- state clearly that MATLAB execution was unavailable, and that the
+  readiness report was not generated
