@@ -1052,6 +1052,49 @@ It is wired into `run_all_tests` after
 `test_r23_ground_truth_antenna_geometry`, so `run_all_tests` covers
 it automatically.
 
+### Deterministic grid-rotation and symmetry tests
+
+`test_r23_grid_rotation_symmetry` is a small set of deterministic
+geometry checks that pin the relationship between the world frame, the
+sector frame, and the (az, el) observation grid in the R23 single-sector
+EIRP MVP. Like the ground-truth and power-normalization tests, it uses
+fixed UE / grid setups and no Monte Carlo, so a silent flip between
+global and relative azimuth, an asymmetric clamp, or a broken
+sector-frame rotation cannot pass.
+
+It verifies:
+
+* **BS azimuth override behaviour**: a UE held fixed at global azimuth
+  `0` deg yields `rawAzDeg = 0` when `bs.azimuth_deg = 0` and
+  `rawAzDeg = -30` when `bs.azimuth_deg = +30`. The UE world position
+  and `get_default_bs()` defaults are unchanged across the two runs.
+* **Global-vs-relative azimuth consistency**: rotating both the BS
+  boresight and the UE / grid by the same angle in the world frame
+  preserves the relative geometry. `bs.azimuth_deg = 0` with UE at
+  global `+30` and `bs.azimuth_deg = +45` with UE at global `+75`
+  produce identical `rawAzDeg`, `steerAzDeg`, composite gain, and
+  per-beam EIRP at the aligned `+30` deg sector-frame grid cell.
+* **Left/right sector symmetry**: with a UE on boresight, the
+  composite gain and per-beam EIRP at sector-frame `-30` and `+30` deg
+  match within numerical tolerance, as expected from the y-mirror
+  symmetry of the panel-frame array factor (mech tilt is a pure
+  y-axis rotation).
+* **Sector-edge behaviour**: the `+/-60` deg edge gains and EIRPs
+  are equal to each other and both sit below the boresight reference.
+* **Deterministic dimensions**: every EIRP output is finite and has
+  the documented `[Naz, Nel, numBeams]` / `[Naz, Nel]` shape.
+
+How to run:
+
+```matlab
+addpath('matlab');
+test_r23_grid_rotation_symmetry
+```
+
+It is wired into `run_all_tests` after
+`test_r23_eirp_power_normalization`, so `run_all_tests` covers it
+automatically.
+
 ## Angle conventions
 
 Matched to pycraf:
