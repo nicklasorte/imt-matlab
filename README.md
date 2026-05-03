@@ -1291,6 +1291,37 @@ test_against_pycraf_strict();
 out = demo_aas_monte_carlo_eirp();
 ```
 
+## R23 MVP readiness report
+
+`generate_r23_mvp_readiness_report` is a one-command readiness artifact
+generator for the R23 single-sector EIRP CDF-grid MVP. It does not change
+antenna math or model behavior; it runs `run_all_tests`, records the
+pass / fail status, checks the core MVP file inventory, performs a
+best-effort legacy-token hygiene scan, and writes a Markdown summary.
+
+```matlab
+% from the repository root, in MATLAB:
+addpath('matlab');
+generate_r23_mvp_readiness_report();
+```
+
+The Markdown report is written to:
+
+```
+reports/r23_mvp_readiness_report.md
+```
+
+(the `reports/` directory is created if needed). The report contains a
+summary, per-test results table, core MVP file inventory, scope-boundary
+confirmation (one site / one sector / three UEs / transmit-side EIRP
+only, no path loss / clutter / FS / FSS / interference aggregation /
+19-site / 57-sector), known limitations, and a next-recommended-action
+section.
+
+`generate_r23_mvp_readiness_report` returns a struct mirroring the
+report (timestamp, MATLAB version, test results, core-file inventory,
+hygiene scan, output path) for programmatic use.
+
 ## Testing
 
 There is one entry point that runs the full suite and prints a pass / fail
