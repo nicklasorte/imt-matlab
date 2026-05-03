@@ -911,6 +911,67 @@ they happen to overlap perfectly) is 78.3 dBm / 100 MHz, conserving the
 sector budget. Setting `splitSectorPower = false` lets each beam peak at
 the full sector EIRP - use only for single-reference-beam diagnostics.
 
+### R23 MVP acceptance contract
+
+`test_r23_mvp_acceptance_contract` is a narrow, fast acceptance gate
+that pins the R23 single-site / single-sector / N-UE EIRP CDF-grid MVP
+as a **product contract**, not as a math regression. It complements
+`test_single_sector_eirp_mvp` (which owns antenna math) and exists to
+catch drift that would silently break callers or smuggle out-of-scope
+modeling into the MVP core.
+
+What it locks down:
+
+* **Public API surface**: every MVP function file exists and is callable
+  on the path (`get_r23_aas_params`, `validate_r23_params`,
+  `get_default_bs`, `generate_single_sector_layout`,
+  `sample_ue_positions_in_sector`, `compute_beam_angles_bs_to_ue`,
+  `clamp_beam_to_r23_coverage`, `compute_bs_gain_toward_grid`,
+  `compute_eirp_grid`, `run_monte_carlo_snapshots`,
+  `compute_cdf_per_grid_point`, `run_single_sector_eirp_demo`).
+* **R23 defaults**: 3 UEs / sector, 120 deg sector width, 35 m min UE
+  distance, 18 m BS height, 78.3 dBm / 100 MHz BS EIRP, 8 x 16 Extended
+  AAS array, +/- 60 deg horizontal coverage, `[90, 100]` global-theta
+  vertical coverage and `[-10, 0]` internal elevation coverage.
+* **Vertical convention**: `rawThetaGlobalDeg` on
+  `compute_beam_angles_bs_to_ue`, `steerThetaGlobalDeg` and
+  `thetaGlobalLimitsDeg` on `clamp_beam_to_r23_coverage`,
+  `thetaGlobalDeg = 90 - elevationDeg`, horizon -> 90 deg, 10 deg
+  downtilt -> 100 deg.
+* **Determinism**: a small `numSnapshots = 5` MC run with a fixed seed
+  is bit-equal across reruns; `eirpGrid` shape is `[Naz, Nel,
+  numSnapshots]`; per-cell percentile maps are non-decreasing.
+* **Input-driven BS**: overriding `bs.height_m`, `bs.azimuth_deg`, and
+  `bs.eirp_dBm_per_100MHz` propagates to downstream beam angles, global
+  theta, azimuth offset, and per-beam peak EIRP without mutating the
+  defaults returned by `get_default_bs()`.
+* **Scope guard**: a static token scan over the MVP core MATLAB files
+  (the ten functions consumed by `run_single_sector_eirp_demo`) refuses
+  out-of-scope tokens (`p2001`, `p2108`, `pathLoss`, `clutterLoss`,
+  `fsReceiver`, `fssReceiver`, `victimReceiver`,
+  `interferenceAggregation`, `nineteenSite`, `fiftySevenSector`,
+  `numSites = 19`, `numSectors = 57`).
+* **Legacy hygiene**: best-effort repo-wide scan finds no `EMBRSS` /
+  `embrss` / `Embrss` occurrences. The shell equivalent is
+
+  ```sh
+  grep -RIn "EMBRSS\|embrss\|Embrss" .
+  ```
+
+How to run:
+
+```matlab
+addpath('matlab');
+test_r23_mvp_acceptance_contract
+```
+
+It is also wired into `run_all_tests` after `test_single_sector_eirp_mvp`,
+so `run_all_tests` covers it automatically. The gate exists to prevent
+drift beyond the one-site, one-sector, three-UE EIRP CDF-grid MVP - it
+deliberately does not assert anything about path loss, FS / FSS
+receivers, interference aggregation, or 19-site / 57-sector laydown,
+none of which are part of this MVP.
+
 ## Angle conventions
 
 Matched to pycraf:
