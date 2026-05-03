@@ -100,12 +100,14 @@ function layout = generate_single_sector_layout(bs, params)
     layout.boresightAzDeg   = bs.azimuth_deg;
     layout.sectorWidthDeg   = bs.sector_width_deg;
     layout.azLimitsDeg      = [-params.hCoverageDeg, params.hCoverageDeg];
-    layout.elLimitsDeg      = [params.vCoverageDegGlobalMin - 90, ...
-                               params.vCoverageDegGlobalMax - 90];
+    % Internal elevation limits from global theta via elDeg = 90 - thetaGlobalDeg.
+    % The conversion is monotonically decreasing, so the limits flip:
+    % elLimitsDeg = [90 - vCoverageDegGlobalMax, 90 - vCoverageDegGlobalMin]
+    layout.elLimitsDeg      = [90 - params.vCoverageDegGlobalMax, ...
+                               90 - params.vCoverageDegGlobalMin];
     % Expose the R23 global-theta envelope explicitly so callers don't
     % have to re-derive 90 - elev. By construction this stays consistent
-    % with elLimitsDeg (the conversion is monotonically decreasing, so
-    % the limits flip).
+    % with elLimitsDeg via the one-line conversion.
     layout.verticalCoverageGlobalThetaDeg = ...
         [params.vCoverageDegGlobalMin, params.vCoverageDegGlobalMax];
     layout.ueHeight_m       = 1.5;
