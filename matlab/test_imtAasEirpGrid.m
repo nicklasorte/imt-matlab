@@ -149,17 +149,17 @@ function results = test_imtAasEirpGrid()
     % ===== bonus: peak gain plausibility check =====
     %   element peak (6.4 dBi) + 10*log10(N_H*N_V) + 10*log10(L)
     %   = 6.4 + 21.07 + 4.77 = ~32.24 dBi  (matches R23 reference 32.2 dBi)
-    composite = imtAasCompositeGain(azGridDeg, elGridDeg, ...
-        steerAz, steerEl, p);
-    peakGain = max(composite(:));
+    % Evaluate at the exact steering direction (scalar call) so the result
+    % does not depend on whether the steering elevation falls on a grid point.
+    peakGainAtSteer = imtAasCompositeGain(steerAz, steerEl, steerAz, steerEl, p);
     expectedPeak = p.elementGainDbi ...
         + 10 * log10(p.numColumns * p.numRows) ...
         + 10 * log10(p.numElementsPerSubarray);
-    assert(abs(peakGain - expectedPeak) < 0.5, ...
+    assert(abs(peakGainAtSteer - expectedPeak) < 0.5, ...
         ['composite peak gain %.3f dBi differs from analytic ' ...
-         '%.3f dBi by > 0.5 dB'], peakGain, expectedPeak);
+         '%.3f dBi by > 0.5 dB'], peakGainAtSteer, expectedPeak);
     fprintf('  [OK] composite peak gain ~ %.2f dBi (expected ~%.2f dBi)\n', ...
-        peakGain, expectedPeak);
+        peakGainAtSteer, expectedPeak);
 
     results.passed = true;
     fprintf('--- test_imtAasEirpGrid PASSED ---\n');

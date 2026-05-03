@@ -37,14 +37,22 @@ function [AZ, EL] = imtAasNormalizeGrid(azGrid, elGrid)
         return;
     end
 
-    if isvector(azGrid) && isvector(elGrid)
-        [AZ, EL] = ndgrid(double(azGrid(:).'), double(elGrid(:).'));
+    if isequal(size(azGrid), size(elGrid))
+        if isvector(azGrid) && size(azGrid, 1) == 1
+            % Same-length ROW vectors [1×N]: independent axes — ndgrid to Naz×Nel.
+            [AZ, EL] = ndgrid(double(azGrid(:).'), double(elGrid(:).'));
+        else
+            % Same-shape column vectors [N×1] or 2-D matrices: already matched
+            % pairs (e.g. output of a prior ndgrid call) — pass through unchanged
+            % so they are not accidentally re-ndgrid'd into a larger square matrix.
+            AZ = double(azGrid);
+            EL = double(elGrid);
+        end
         return;
     end
 
-    if isequal(size(azGrid), size(elGrid))
-        AZ = double(azGrid);
-        EL = double(elGrid);
+    if isvector(azGrid) && isvector(elGrid)
+        [AZ, EL] = ndgrid(double(azGrid(:).'), double(elGrid(:).'));
         return;
     end
 

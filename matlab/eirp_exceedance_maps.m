@@ -22,7 +22,8 @@ function emaps = eirp_exceedance_maps(stats, thresholds_dBm)
     thresholds_dBm = thresholds_dBm(:).';
     T = numel(thresholds_dBm);
 
-    flat = reshape(stats.counts, Naz*Nel, Nbin);
+    % Convert uint32 counts to double for cumsum/division arithmetic.
+    flat = double(reshape(stats.counts, Naz*Nel, Nbin));
     total = sum(flat, 2);
     cdf  = cumsum(flat, 2) ./ max(total, 1);
 
