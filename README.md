@@ -972,6 +972,50 @@ deliberately does not assert anything about path loss, FS / FSS
 receivers, interference aggregation, or 19-site / 57-sector laydown,
 none of which are part of this MVP.
 
+### Deterministic ground-truth antenna geometry tests
+
+`test_r23_ground_truth_antenna_geometry` is a small set of "known
+answer" geometry checks that anchor the R23 single-sector EIRP CDF-grid
+MVP to behaviour that is independent of any tuning choice in the
+antenna model. The tests are deterministic - no Monte Carlo, no random
+seeds - and use fixed UE / grid geometries so a flipped elevation sign
+or a swapped azimuth-clamp side cannot pass.
+
+It covers:
+
+* **Boresight peak**: a UE directly in front of the sector at default
+  height (1.5 m, 200 m range) gives a small natural downtilt that sits
+  inside the R23 envelope, so no clamp occurs. The composite BS gain
+  evaluated at the steered direction is the max among coarse azimuth-
+  offset comparison points at the same elevation.
+* **Off-axis gain drop**: with the same steered beam, the composite
+  gain decreases monotonically across azimuth offsets `{0, 30, 60}`
+  deg from boresight at the steered elevation.
+* **R23 global-theta convention**: a UE at the same height as the BS
+  yields `rawElDeg ~ 0` and `rawThetaGlobalDeg ~ 90`; a UE 10 deg
+  below the horizon yields `rawElDeg ~ -10` and
+  `rawThetaGlobalDeg ~ 100` (matching `thetaGlobalDeg = 90 - elevationDeg`).
+* **Beam clamp behaviour**: `rawElDeg = +5` clamps to
+  `steerElDeg = 0` / `steerThetaGlobalDeg = 90`; `rawElDeg = -20`
+  clamps to `steerElDeg = -10` / `steerThetaGlobalDeg = 100`;
+  `rawAzDeg = +/-90` and `-75` clamp to `+/-60` while a `+45` raw
+  azimuth is left untouched.
+* **EIRP finite / relative sanity**: with the boresight setup the
+  per-beam EIRP at the aligned grid point is finite and exceeds the
+  off-axis comparison points; output dimensions match the documented
+  `[Naz, Nel, numBeams]` shape.
+
+How to run:
+
+```matlab
+addpath('matlab');
+test_r23_ground_truth_antenna_geometry
+```
+
+It is wired into `run_all_tests` after
+`test_r23_mvp_acceptance_contract`, so `run_all_tests` covers it
+automatically.
+
 ## Angle conventions
 
 Matched to pycraf:
