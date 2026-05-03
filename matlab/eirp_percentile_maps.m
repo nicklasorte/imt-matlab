@@ -28,7 +28,8 @@ function pmaps = eirp_percentile_maps(stats, percentiles)
     [Naz, Nel, Nbin] = size(stats.counts);
     P = numel(percentiles);
 
-    flat = reshape(stats.counts, Naz*Nel, Nbin);
+    % Convert uint32 counts to double for cumsum/division arithmetic.
+    flat = double(reshape(stats.counts, Naz*Nel, Nbin));
     rowSum = sum(flat, 2);
     cdf  = cumsum(flat, 2) ./ max(rowSum, 1);
 

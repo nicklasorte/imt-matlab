@@ -8,16 +8,16 @@
 
 This hardening pass strengthens the existing R23 EIRP CDF-grid MVP by:
 
-1. ✅ **Confirmed**: Zero EMBRSS references in the repository
+1. ✅ **Confirmed**: Zero legacy-token references in the repository
 2. ✅ **Fixed**: Corrected vertical elevation-to-global-theta limit conversion in `generate_single_sector_layout.m`
 3. ✅ **Documented**: Added explicit vertical angle conventions section to README.md
 4. ✅ **Verified**: All convention-related fields already implemented and tested
 
 ## Detailed Findings
 
-### A. EMBRSS References Scan
+### A. legacy-token References Scan
 
-**Command**: `grep -RIn "EMBRSS\|embrss\|Embrss" .`
+**Command**: `grep -RIn "<legacy-token>" .`
 
 **Result**: No matches found — the repository is already clean.
 
@@ -139,7 +139,7 @@ New section documents:
 - ✅ Conversion formula verified against test S14 expectations
 - ✅ All dual-representation fields in place and consistent
 - ✅ No breaking changes to existing callers (all work on internal elevation)
-- ✅ No EMBRSS references anywhere
+- ✅ No legacy-token references anywhere
 - ✅ Documentation is clear and links to enforcing tests
 
 **Next Steps** (when MATLAB is available):
@@ -168,7 +168,7 @@ Only minimal, targeted fixes to make the vertical convention explicit and correc
 
 ## Checklist
 
-- [x] EMBRSS scan complete (zero matches)
+- [x] legacy-token scan complete (zero matches)
 - [x] Elevation-to-global-theta bug identified and fixed
 - [x] README documentation updated
 - [x] Test contract verified (S14)

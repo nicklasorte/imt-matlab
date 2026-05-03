@@ -168,11 +168,13 @@ function rawGain_dBi = evalRawExtended(azP, elP, azP_i, elP_i, cfg)
         arg_sub   = 2*pi .* l_idx .* sub_phase;
         Ssub      = sum(exp(1j .* arg_sub), 5);
         AFsub     = (real(Ssub).^2 + imag(Ssub).^2) ./ double(L);
-        sub_term_dB = 10 .* log10(AFsub);
+        sub_term_dB = 10 .* log10(max(AFsub, eps));
     end
 
     % --- combine -----------------------------------------------------
+    % Clamp to eps before log10 so perfect array nulls give a large finite
+    % negative dB value rather than -Inf.
     rawGain_dBi = A_E ...
-        + 10 .* log10(1 + cfg.rho .* (AF - 1)) ...
+        + 10 .* log10(max(1 + cfg.rho .* (AF - 1), eps)) ...
         + sub_term_dB;
 end

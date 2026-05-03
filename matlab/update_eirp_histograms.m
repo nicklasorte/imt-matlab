@@ -36,9 +36,9 @@ function stats = update_eirp_histograms(stats, eirp_dBm)
     elIdx = repmat( 1:Nel,    Naz, 1);
 
     linIdx = sub2ind([Naz, Nel, Nbin], azIdx(:), elIdx(:), binIdx(:));
-    % accumarray over a flat index space
+    % accumarray returns double; cast to uint32 before adding to uint32 counts.
     counts_flat = stats.counts(:);
-    counts_flat = counts_flat + accumarray(linIdx, 1, [Naz*Nel*Nbin, 1]);
+    counts_flat = counts_flat + uint32(accumarray(linIdx, 1, [Naz*Nel*Nbin, 1]));
     stats.counts = reshape(counts_flat, [Naz, Nel, Nbin]);
 
     stats.numMc = stats.numMc + 1;

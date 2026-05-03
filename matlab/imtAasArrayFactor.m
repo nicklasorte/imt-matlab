@@ -104,7 +104,9 @@ function arrayGainDbi = imtAasArrayFactor(azGridDeg, elGridDeg, ...
     S   = sum(sum(exp(1j .* arg), 4), 3);
     AF  = (real(S).^2 + imag(S).^2) ./ (double(N_H) .* double(N_V));
 
-    outerDb = 10 .* log10(1 + rho .* (AF - 1));
+    % Clamp to eps before log10 so perfect array nulls give a large finite
+    % negative dB value rather than -Inf (which propagates through the grid).
+    outerDb = 10 .* log10(max(1 + rho .* (AF - 1), eps));
 
     % --- L-element vertical sub-array factor (fixed downtilt) ---------
     %   AFsub = | sum_{l=0..L-1} exp(j*2*pi*l*d_sub*( cos(th) + sin(th_sub) )) |^2 / L
@@ -117,7 +119,7 @@ function arrayGainDbi = imtAasArrayFactor(azGridDeg, elGridDeg, ...
         argSub    = 2*pi .* l_axis .* sub_phase;              % broadcast
         Ssub      = sum(exp(1j .* argSub), 3);
         AFsub     = (real(Ssub).^2 + imag(Ssub).^2) ./ double(L);
-        subDb     = 10 .* log10(AFsub);
+        subDb     = 10 .* log10(max(AFsub, eps));
     end
 
     arrayGainDbi = outerDb + subDb;

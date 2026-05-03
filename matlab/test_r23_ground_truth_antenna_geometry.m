@@ -281,7 +281,10 @@ function r = g5_eirp_sanity(r)
         struct('splitSectorPower', true));
 
     % Output shape: [Naz Nel numBeams]; with N=1 UE this is [3 1 1].
-    okShape = isequal(size(snap.perBeamEirpDbm), [3, 1, 1]);
+    % MATLAB size() drops trailing singletons, so [3 1 1] appears as [3 1].
+    sz = size(snap.perBeamEirpDbm);
+    okShape = sz(1) == 3 && (numel(sz) < 2 || sz(2) == 1) && ...
+              (numel(sz) < 3 || sz(3) == 1);
 
     % Per-beam EIRP at the aligned vs. off-axis grid points.
     eirpSlice = squeeze(snap.perBeamEirpDbm);   % length 3 vector
