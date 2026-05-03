@@ -30,6 +30,20 @@ function out = run_monte_carlo_snapshots(bs, gridPoints, params, simConfig)
 %                       .seed              default 1 (RNG seed)
 %                       .splitSectorPower  default true
 %                       .progressEvery     default 0 (silent)
+%                       .maxCubeMiB        optional cap on the estimated
+%                                          full EIRP cube size (MiB).
+%                                          Default 256. The estimate is
+%                                          produced by
+%                                          estimate_r23_mvp_cube_memory.
+%                       .allowLargeCube    optional logical (default
+%                                          false). When false and the
+%                                          estimated cube exceeds
+%                                          maxCubeMiB, the call fails
+%                                          closed with a clear error
+%                                          telling the user to reduce
+%                                          the grid / numSnapshots or
+%                                          to use the streaming
+%                                          runR23AasEirpCdfGrid path.
 %
 %   Output struct fields:
 %       eirpGrid             Naz x Nel x numSnapshots [dBm / 100 MHz]
@@ -43,6 +57,9 @@ function out = run_monte_carlo_snapshots(bs, gridPoints, params, simConfig)
 %       params, bs           passthroughs
 %       seed                 effective seed used
 %       elapsedSeconds       wall-clock runtime
+%       memoryEstimate       struct from estimate_r23_mvp_cube_memory
+%       maxCubeMiB           effective guard threshold [MiB]
+%       allowLargeCube       logical, whether the guard was bypassed
 %
 %   Example:
 %       bs   = get_default_bs();
@@ -69,6 +86,8 @@ function out = run_monte_carlo_snapshots(bs, gridPoints, params, simConfig)
     seed             = getOpt(simConfig, 'seed',             1);
     splitSectorPower = getOpt(simConfig, 'splitSectorPower', true);
     progressEvery    = getOpt(simConfig, 'progressEvery',    0);
+    maxCubeMiB       = getOpt(simConfig, 'maxCubeMiB',       256);
+    allowLargeCube   = getOpt(simConfig, 'allowLargeCube',   false);
 
     if ~(isnumeric(numSnapshots) && isscalar(numSnapshots) && ...
             isfinite(numSnapshots) && numSnapshots >= 1 && ...
@@ -81,12 +100,43 @@ function out = run_monte_carlo_snapshots(bs, gridPoints, params, simConfig)
         error('run_monte_carlo_snapshots:badNumUes', ...
             'simConfig.numUes must be a positive integer.');
     end
+    if ~(isnumeric(maxCubeMiB) && isscalar(maxCubeMiB) && ...
+            isfinite(maxCubeMiB) && maxCubeMiB > 0)
+        error('run_monte_carlo_snapshots:badMaxCubeMiB', ...
+            'simConfig.maxCubeMiB must be a positive finite scalar.');
+    end
+    if ~(islogical(allowLargeCube) || ...
+            (isnumeric(allowLargeCube) && isscalar(allowLargeCube)))
+        error('run_monte_carlo_snapshots:badAllowLargeCube', ...
+            'simConfig.allowLargeCube must be a logical scalar.');
+    end
+    allowLargeCube = logical(allowLargeCube);
 
     azVec = double(gridPoints.azGridDeg(:).');
     elVec = double(gridPoints.elGridDeg(:).');
     Naz = numel(azVec);
     Nel = numel(elVec);
     [AZ, EL] = ndgrid(azVec, elVec);
+
+    % --- Memory guardrail ---------------------------------------------
+    % Estimate the full Naz x Nel x numSnapshots double cube before
+    % allocating it. Fail closed when the estimate exceeds maxCubeMiB
+    % unless allowLargeCube was set. The streaming runR23AasEirpCdfGrid
+    % path is the recommended workflow for oversized jobs.
+    memEst = estimate_r23_mvp_cube_memory(Naz, Nel, numSnapshots, ...
+        struct('largeThresholdMiB', maxCubeMiB));
+    if memEst.estimatedTotalMiB > maxCubeMiB && ~allowLargeCube
+        error('run_monte_carlo_snapshots:cubeTooLarge', ...
+            ['Estimated EIRP cube ~%.2f MiB exceeds maxCubeMiB = '...
+             '%.2f MiB (Naz=%d, Nel=%d, numSnapshots=%d). Reduce '...
+             'gridPoints or simConfig.numSnapshots, or use the '...
+             'streaming runR23AasEirpCdfGrid workflow that never '...
+             'materializes the per-draw EIRP cube. To bypass for a '...
+             'small intentional run, set simConfig.allowLargeCube = '...
+             'true.'], ...
+            memEst.estimatedTotalMiB, maxCubeMiB, Naz, Nel, ...
+            double(numSnapshots));
+    end
 
     if ~isempty(seed)
         rng(seed);
@@ -142,6 +192,9 @@ function out = run_monte_carlo_snapshots(bs, gridPoints, params, simConfig)
     out.bs                   = bs;
     out.seed                 = seed;
     out.elapsedSeconds       = toc(tStart);
+    out.memoryEstimate       = memEst;
+    out.maxCubeMiB           = double(maxCubeMiB);
+    out.allowLargeCube       = allowLargeCube;
 end
 
 % =====================================================================

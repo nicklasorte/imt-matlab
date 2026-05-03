@@ -46,8 +46,10 @@ matlab/
 ├── test_r23_aas_defaults.m            self tests for the R23 7/8 GHz defaults
 ├── test_r23_extended_aas_eirp.m       self tests for the R23 extended AAS path
 ├── estimate_aas_mc_memory.m           memory estimator for hist / pctile / CSV
+├── estimate_r23_mvp_cube_memory.m     memory estimator for the R23 MVP EIRP cube
 ├── profile_aas_monte_carlo_runtime.m  runtime profiler + full-grid extrapolation
 ├── test_runtime_scaling_controls.m    self tests for chunking / memory / progress
+├── test_r23_mvp_runtime_memory_guardrails.m self tests for the R23 MVP cube guard
 └── test_runR23AasEirpCdfGrid.m        self tests for the R23 EIRP CDF-grid MVP
 ```
 
@@ -1138,6 +1140,57 @@ test_r23_monte_carlo_and_cdf
 It is wired into `run_all_tests` after
 `test_r23_grid_rotation_symmetry`, so `run_all_tests` covers it
 automatically.
+
+### Runtime and memory guardrails
+
+The R23 single-sector MVP path
+(`run_monte_carlo_snapshots` -> `compute_cdf_per_grid_point`)
+intentionally returns the **full per-snapshot EIRP cube**
+`eirpGrid : Naz x Nel x numSnapshots` (double precision). That is the
+shape `compute_cdf_per_grid_point` consumes, and it is the documented
+AAS-01 contract. Use it for **MVP-scale runs and small validation
+sweeps** where the cube fits comfortably in RAM.
+
+For larger grids and / or larger snapshot counts the full-cube path
+gets expensive in a hurry. As a reference, the `runR23AasEirpCdfGrid`
+default 361 x 181 grid with `numMc = 1e4` would alone need
+`361 * 181 * 1e4 * 8 B ~ 4.87 GiB` for the cube. Use the
+**streaming / histogram workflow** (`runR23AasEirpCdfGrid`) for those
+jobs - it never materializes the per-draw EIRP cube and instead keeps
+a fixed-size `Naz x Nel x Nbin` histogram aggregator
+(plus per-cell sums / min / max).
+
+To make accidental misuse fail closed, `run_monte_carlo_snapshots`
+accepts two optional `simConfig` fields:
+
+* `simConfig.maxCubeMiB` - cap on the estimated full EIRP cube size in
+  MiB. Default `256`. The estimate is produced by
+  `estimate_r23_mvp_cube_memory(Naz, Nel, numSnapshots)` and includes a
+  small per-snapshot beam / UE struct overhead.
+* `simConfig.allowLargeCube` - logical, default `false`. When the
+  estimate exceeds `maxCubeMiB` and `allowLargeCube` is `false` the
+  call errors out with id
+  `run_monte_carlo_snapshots:cubeTooLarge`. The error message names
+  the offending dimensions and points the user at the two escape
+  hatches: reduce `gridPoints` / `simConfig.numSnapshots`, or use the
+  streaming `runR23AasEirpCdfGrid` workflow. Setting
+  `allowLargeCube = true` bypasses the guard for an intentional
+  oversized run.
+
+The default 256 MiB cap is conservative on purpose - all existing
+small-grid MVP tests sit in the low-MB range and are unaffected. The
+guard is a memory safety check only: it does not change the antenna
+math, the EIRP accounting, or the CDF semantics.
+
+How to run the guardrail tests:
+
+```matlab
+addpath('matlab');
+test_r23_mvp_runtime_memory_guardrails
+```
+
+It is wired into `run_all_tests` after `test_r23_monte_carlo_and_cdf`,
+so `run_all_tests` covers it automatically.
 
 ## Angle conventions
 
