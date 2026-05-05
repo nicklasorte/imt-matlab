@@ -810,12 +810,13 @@ Every preset stamps explicit metadata that propagates into
 | `metadata.presetOverrides`                  | overrides actually applied |
 | `metadata.referenceOnly.networkLoadingFactor` | reference value (NOT active in EIRP-grid run) |
 | `metadata.referenceOnly.bsTddActivityFactor`  | reference value (NOT active in EIRP-grid run) |
-| `metadata.referenceOnly.belowRooftopFraction` | reference value (NOT active in EIRP-grid run) |
 
 > **Note.** `referenceOnly.*` values are stamped purely for traceability
 > against R23 study assumptions. The current MVP does **not** model
-> network loading, TDD activity, below-rooftop deployment, clutter, or
-> scheduler behaviour. These remain antenna-face EIRP runs only.
+> network loading, TDD activity, clutter, rooftop, or scheduler
+> behaviour. Rooftop / clutter / below-rooftop assumptions are
+> intentionally **not** exposed at the preset layer. These remain
+> antenna-face EIRP runs only.
 
 To compare two scenarios side-by-side:
 

@@ -16,6 +16,8 @@ function results = test_r23ScenarioPreset()
 %       S10. compareR23ScenarioMetadata returns expected diff entries.
 %       S11. preset overrides are forwarded into params.
 %       S12. reference-only metadata is stamped (and clearly tagged).
+%       S12b. preset metadata does NOT expose belowRooftop/rooftop/
+%             clutter fields (out-of-scope for antenna-face EIRP MVP).
 
     results.summary = {};
     results.passed  = true;
@@ -256,6 +258,39 @@ function r = s_reference_only_metadata(r)
          ~isempty(strfind(lower(p.metadata.referenceOnly.notes), 'not active')); %#ok<STREMP>
     r = check(r, ok, ...
         'S12: referenceOnly metadata is stamped and explicitly marked NOT active');
+
+    % S12b: preset metadata MUST NOT expose below-rooftop / rooftop /
+    % clutter values. These are out of scope for the antenna-face EIRP
+    % MVP and must not leak into the preset layer.
+    presets = {'urban-baseline', 'suburban-baseline'};
+    bannedRefOnly = {'belowRooftopFraction', 'belowRooftop', ...
+                     'rooftopFraction', 'rooftop', ...
+                     'clutterFraction', 'clutter', 'clutterLoss'};
+    okBan = true;
+    for kk = 1:numel(presets)
+        pk = r23ScenarioPreset(presets{kk});
+        if ~isfield(pk.metadata, 'referenceOnly') || ...
+                ~isstruct(pk.metadata.referenceOnly)
+            okBan = false; break;
+        end
+        roFields = fieldnames(pk.metadata.referenceOnly);
+        for jj = 1:numel(bannedRefOnly)
+            if any(strcmpi(roFields, bannedRefOnly{jj}))
+                okBan = false; break;
+            end
+        end
+        if ~okBan, break; end
+        % Top-level metadata must not carry rooftop/clutter fields either.
+        mdFields = fieldnames(pk.metadata);
+        for jj = 1:numel(bannedRefOnly)
+            if any(strcmpi(mdFields, bannedRefOnly{jj}))
+                okBan = false; break;
+            end
+        end
+        if ~okBan, break; end
+    end
+    r = check(r, okBan, ...
+        'S12b: preset metadata does NOT expose belowRooftop/rooftop/clutter fields');
 end
 
 % =====================================================================
