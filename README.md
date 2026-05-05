@@ -31,7 +31,10 @@ matlab/
 ├── update_eirp_histograms.m           streaming per-cell stats update
 ├── run_imt_aas_eirp_monte_carlo.m     MC driver, never stores the EIRP cube
 ├── runR23AasEirpCdfGrid.m             source-aligned R23 EIRP CDF-grid MVP
+├── r23DefaultParams.m                 centralized nested R23 parameter builder (urban/suburban)
+├── r23ToImtAasParams.m                adapter from nested r23DefaultParams to flat imtAasDefaultParams
 ├── plotR23AasEirpCdfGrid.m            mean + percentile heatmaps for the R23 MVP
+├── plotR23AasPointingHeatmap.m        antenna pointing-angle (az/el) heatmaps for the R23 MVP
 ├── eirp_percentile_maps.m             per-angle percentile maps from histograms
 ├── eirp_cdf_at_angle.m                empirical CDF at one (az,el)
 ├── eirp_exceedance_maps.m             P(EIRP > threshold) maps
@@ -50,7 +53,9 @@ matlab/
 ├── profile_aas_monte_carlo_runtime.m  runtime profiler + full-grid extrapolation
 ├── test_runtime_scaling_controls.m    self tests for chunking / memory / progress
 ├── test_r23_mvp_runtime_memory_guardrails.m self tests for the R23 MVP cube guard
-└── test_runR23AasEirpCdfGrid.m        self tests for the R23 EIRP CDF-grid MVP
+├── test_runR23AasEirpCdfGrid.m        self tests for the R23 EIRP CDF-grid MVP
+├── test_r23DefaultParams.m            self tests for the centralized parameter builder
+└── test_r23_parameterized_run.m       self tests for parameterized run / pointing heatmaps
 ```
 
 ## What was ported from pycraf
@@ -669,30 +674,84 @@ out = runR23AasEirpCdfGrid();
 runR23AasEirpCdfGridExample
 ```
 
-`opts` (all fields optional):
+#### Parameterized usage
 
-| field | default | meaning |
-| ----- | ------- | ------- |
-| `numMc`              | `1000`                          | Monte Carlo draws |
-| `azGridDeg`          | `-180:1:180`                    | azimuth grid [deg] |
-| `elGridDeg`          | ` -90:1:90`                     | elevation grid [deg] |
-| `binEdgesDbm`        | `-100:1:120`                    | histogram bin edges [dBm] |
-| `percentiles`        | `[1 5 10 20 50 80 90 95 99]`   | percentile maps to compute |
-| `seed`               | `1`                             | RNG seed (set once at start) |
-| `deployment`         | `'macroUrban'`                  | `'macroUrban'` or `'macroSuburban'` |
-| `numBeams`           | `params.numUesPerSector` (= 3) | simultaneous UE beams per sector |
-| `splitSectorPower`   | `true`                          | split sector EIRP across simultaneous beams |
-| `progressEvery`      | `0`                             | print progress every N draws |
-| `mcChunkSize`        | `min(numMc, 500)`               | (reserved for forward compatibility) |
-| `outputCsvPath`      | `''`                            | optional `p000:p100` table CSV |
-| `outputMetadataPath` | `''`                            | optional JSON / text metadata sidecar |
+`runR23AasEirpCdfGrid` accepts (a) a flat `opts` struct, (b) a nested
+parameter struct from `r23DefaultParams(environment)`, or (c)
+`'Name', Value` pairs. The number of UEs per sector, the maximum sector
+EIRP, and the deployment environment (`'urban'` / `'suburban'`) are all
+input-configurable - none are baked into helper functions.
 
-`out.stats` is the streaming aggregator (counts, sum_lin_mW, min/max,
-mean_dBm, plus `perBeamPeakEirpDbm`, `sectorEirpDbm`, `numBeams`,
-`deployment`). `out.percentileMaps` is the struct from
-`eirp_percentile_maps`. `out.metadata` carries the explicit
-no-path-loss / no-receiver / no-I-N caveats and the source-aligned R23
-power semantics.
+```matlab
+% Default run (urban, 3 UEs/sector, 78.3 dBm/100 MHz sector EIRP)
+out = runR23AasEirpCdfGrid();
+
+% Suburban macro preset via the centralized parameter builder
+params = r23DefaultParams("suburban");
+out    = runR23AasEirpCdfGrid(params);
+
+% Tune individual fields on the nested params struct
+params = r23DefaultParams("suburban");
+params.ue.numUesPerSector       = 10;       % 10 UEs/sector
+params.bs.maxEirpPerSector_dBm  = 75;       % 75 dBm/100 MHz sector EIRP
+out = runR23AasEirpCdfGrid(params);
+
+% Same overrides via name-value pairs
+out = runR23AasEirpCdfGrid( ...
+    'environment',          'suburban', ...
+    'numUesPerSector',      10, ...
+    'maxEirpPerSector_dBm', 75);
+
+% Pointing heatmaps (azimuth / elevation per (az, el) grid cell)
+plotR23AasPointingHeatmap(out, 'azimuth');
+plotR23AasPointingHeatmap(out, 'elevation');
+```
+
+Recognised flat `opts` fields and name-value keys (all optional):
+
+| key                       | default                          | meaning |
+| ------------------------- | -------------------------------- | ------- |
+| `numUesPerSector`         | `3`                              | UEs per sector (a.k.a. `numBeams`); positive integer |
+| `maxEirpPerSector_dBm`    | `78.3`                           | sector peak EIRP [dBm / 100 MHz]; finite scalar |
+| `environment`             | `'urban'`                        | `'urban'` (`'macroUrban'`) or `'suburban'` (`'macroSuburban'`) |
+| `numMc`                   | `1000`                           | Monte Carlo draws (a.k.a. `numSnapshots`) |
+| `azGridDeg`               | `-180:1:180`                     | azimuth grid [deg] |
+| `elGridDeg`               | ` -90:1:90`                      | elevation grid [deg] |
+| `binEdgesDbm`             | `-100:1:120`                     | histogram bin edges [dBm] |
+| `percentiles`             | `[1 5 10 20 50 80 90 95 99]`     | percentile maps to compute |
+| `seed`                    | `1`                              | RNG seed (set once at start) |
+| `splitSectorPower`        | `true`                           | split sector EIRP across simultaneous beams |
+| `computePointingHeatmap`  | `true`                           | compute mean pointing-angle heatmaps |
+| `progressEvery`           | `0`                              | print progress every N draws |
+| `outputCsvPath`           | `''`                             | optional `p000:p100` table CSV |
+| `outputMetadataPath`      | `''`                             | optional JSON / text metadata sidecar |
+
+#### Suburban macro defaults (vs urban)
+
+| field                                      | urban  | suburban |
+| ------------------------------------------ | ------ | -------- |
+| `params.deployment.cellRadius_m`           | 400    | 800      |
+| `params.deployment.bsHeight_m`             | 18     | 20       |
+| `params.deployment.bsDensityPerKm2`        | 10     | 2.4      |
+| `params.deployment.belowRooftopFraction`   | 0.65   | 0.15     |
+
+The Extended AAS antenna table (8 x 16 sub-array, 6.4 dBi element gain,
+90/65 deg beamwidths, 30 dB front-to-back, 0.5 / 2.1 / 0.7 lambda
+spacings, 3 deg sub-array downtilt, 6 deg mechanical downtilt, +/- 60
+deg horizontal coverage, 90-100 deg global-theta vertical coverage) is
+**identical** for macro urban and macro suburban at 7.125-8.4 GHz.
+
+#### Output struct
+
+| field             | meaning |
+| ----------------- | ------- |
+| `out.params`           | flat `imtAasDefaultParams`-shaped struct used (with overrides applied) |
+| `out.nestedParams`     | nested `r23DefaultParams` struct used (full provenance) |
+| `out.sector`           | `imtAasSingleSectorParams` deployment / steering envelope |
+| `out.stats`            | streaming aggregator (counts, sum_lin_mW, min/max, mean_dBm, ...) |
+| `out.percentileMaps`   | per-cell percentile EIRP maps |
+| `out.pointing`         | mean pointing azimuth / elevation per grid cell (degrees) |
+| `out.metadata`         | run metadata: environment, numUesPerSector, maxEirpPerSector_dBm, sourceDefault, no-path-loss caveats |
 
 ### UE-driven 3-beam sector snapshots
 
