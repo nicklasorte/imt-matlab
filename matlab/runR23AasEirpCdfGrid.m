@@ -82,6 +82,11 @@ function out = runR23AasEirpCdfGrid(varargin)
 %                           scope, no-path-loss/no-receiver caveats,
 %                           environment, numUesPerSector,
 %                           maxEirpPerSector_dBm, sourceDefault, ...).
+%                           Provenance fields (best-effort, never fatal):
+%                             .repoCommitSha          git HEAD or 'unknown'
+%                             .matlabVersion          version + release tag
+%                             .platform               os-arch identifier
+%                             .validationTimestampUtc ISO 8601 UTC string
 %
 %   See also: r23DefaultParams, imtAasDefaultParams,
 %             imtAasSingleSectorParams, imtAasGenerateBeamSet,
@@ -399,6 +404,10 @@ function out = runR23AasEirpCdfGrid(varargin)
         'UE-driven beam pointings; they are NOT a time-probability ', ...
         'distribution beyond the Monte Carlo ensemble.'];
     metadata.createdAtIso          = iso8601Now();
+    metadata.validationTimestampUtc = metadata.createdAtIso;
+    metadata.repoCommitSha         = getRepoCommitSha();
+    metadata.matlabVersion         = getMatlabVersion();
+    metadata.platform              = getPlatformDescription();
 
     % ---- assemble output --------------------------------------------
     out = struct();
@@ -565,6 +574,80 @@ function s = iso8601Now()
             'Format', 'yyyy-MM-dd''T''HH:mm:ss''Z'''));
     catch
         s = datestr(now, 'yyyy-mm-ddTHH:MM:SS'); %#ok<DATST,TNOW1>
+    end
+end
+
+function sha = getRepoCommitSha()
+%GETREPOCOMMITSHA Best-effort `git rev-parse HEAD` for run provenance.
+%   Returns 'unknown' when git or the repo are not available. Never
+%   raises -- provenance is observability, not a hard precondition.
+    sha = 'unknown';
+    thisFile = mfilename('fullpath');
+    if isempty(thisFile)
+        return;
+    end
+    matlabDir = fileparts(thisFile);
+    repoRoot  = fileparts(matlabDir);
+    if isempty(repoRoot) || exist(repoRoot, 'dir') ~= 7
+        return;
+    end
+    try
+        cmd = sprintf('git -C "%s" rev-parse HEAD 2>/dev/null', repoRoot);
+        [status, raw] = system(cmd);
+        if status == 0
+            tok = strtrim(raw);
+            if ~isempty(tok)
+                sha = tok;
+            end
+        end
+    catch
+        % Leave as 'unknown' on any failure.
+    end
+end
+
+function v = getMatlabVersion()
+%GETMATLABVERSION Compact MATLAB version string (e.g. '25.2 (R2025b)').
+    v = 'unknown';
+    try
+        relStr = '';
+        try
+            r = version('-release');
+            if ~isempty(r)
+                relStr = sprintf(' (R%s)', r);
+            end
+        catch
+        end
+        v = sprintf('%s%s', version, relStr);
+    catch
+    end
+end
+
+function p = getPlatformDescription()
+%GETPLATFORMDESCRIPTION Compact OS/arch identifier for provenance.
+    p = 'unknown';
+    try
+        archStr = computer('arch');
+    catch
+        archStr = '';
+    end
+    try
+        if ispc
+            osStr = 'pc';
+        elseif ismac
+            osStr = 'mac';
+        elseif isunix
+            osStr = 'unix';
+        else
+            osStr = '';
+        end
+    catch
+        osStr = '';
+    end
+    parts = {};
+    if ~isempty(osStr); parts{end+1} = osStr; end %#ok<AGROW>
+    if ~isempty(archStr); parts{end+1} = archStr; end %#ok<AGROW>
+    if ~isempty(parts)
+        p = strjoin(parts, '-');
     end
 end
 

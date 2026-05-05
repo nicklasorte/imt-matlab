@@ -1540,6 +1540,51 @@ section.
 report (timestamp, MATLAB version, test results, core-file inventory,
 hygiene scan, output path) for programmatic use.
 
+## Validation Snapshot Artifacts
+
+`exportR23ValidationSnapshot` writes a lightweight reproducibility
+metadata sidecar for a validated `runR23AasEirpCdfGrid` run. It does
+not change antenna math, modeling behavior, or storage strategy.
+
+```matlab
+addpath('matlab');
+params = r23ScenarioPreset("urban-baseline");
+out    = runR23AasEirpCdfGrid(params);
+exportR23ValidationSnapshot(out, "artifacts/run001");
+```
+
+The runner stamps best-effort provenance fields onto `out.metadata`:
+
+| Field | Source | Fallback |
+| --- | --- | --- |
+| `repoCommitSha` | `git rev-parse HEAD` | `'unknown'` |
+| `matlabVersion` | `version` + `version('-release')` | `'unknown'` |
+| `platform` | `os-arch` from `ispc/ismac/isunix` + `computer('arch')` | `'unknown'` |
+| `validationTimestampUtc` | ISO 8601 UTC string | local time string |
+
+`exportR23ValidationSnapshot(out, outputDir)` writes:
+
+```
+outputDir/
+  metadata.json           - run metadata (provenance + scenario)
+  selfcheck.json          - power-semantics self-check result
+  scenario_diff.json      - scenarioPreset / overrides / referenceOnly
+  percentile_summary.csv  - per-percentile min/median/max across the grid
+  validation_summary.txt  - human-readable provenance + status sheet
+```
+
+This is **lightweight reproducibility metadata, not raw Monte Carlo
+storage**. The full per-draw EIRP cube is never written, the streaming
+histogram is intentionally not exported, and each artifact is small
+(typically < 4 KiB; the test suite caps each at 256 KiB). The intent is
+to make a validated run replayable: same git SHA + MATLAB version +
+scenario preset + overrides yields the same numbers under a fixed seed.
+
+Scope guard: this helper does not introduce path loss, clutter, rooftop
+modeling, receiver, I/N, propagation, coordination distance, or
+multi-site aggregation. It is observability / reproducibility hardening
+only.
+
 ## Testing
 
 There is one entry point that runs the full suite and prints a pass / fail
