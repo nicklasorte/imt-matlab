@@ -1,0 +1,23 @@
+{
+  "hasScenarioPreset": true,
+  "scenarioPreset": "urban-baseline",
+  "scenarioCategory": "baseline",
+  "sourceReference": "ITU-R R23 7.125-8.4 GHz macro urban baseline assumptions (Extended AAS, 8x16 sub-array, 78.3 dBm sector EIRP / 100 MHz)",
+  "reproducible": true,
+  "presetOverrides": {},
+  "referenceOnly": {
+    "notes": "reference-only metadata; NOT active in current antenna-face EIRP-grid run",
+    "networkLoadingFactor": 0.2,
+    "bsTddActivityFactor": 0.75
+  },
+  "coreScenarioFields": {
+    "environment": "urban",
+    "cellRadius_m": 400,
+    "bsHeight_m": 18,
+    "numUesPerSector": 3,
+    "maxEirpPerSector_dBm": 78.3,
+    "splitSectorPower": true,
+    "frequencyMHz": 8000,
+    "bandwidthMHz": 100
+  }
+}

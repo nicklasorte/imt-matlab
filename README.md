@@ -1585,6 +1585,53 @@ modeling, receiver, I/N, propagation, coordination distance, or
 multi-site aggregation. It is observability / reproducibility hardening
 only.
 
+## Golden Reference Scenario
+
+`r23GoldenReferenceScenario` + `verifyR23GoldenReference` together
+provide one **frozen regression anchor** for the R23 AAS EIRP MVP.
+This is not a new model. It does not introduce propagation, path loss,
+clutter, rooftop modeling, receiver behavior, I/N, aggregation, or
+multi-site deployment. The goal is to lock in current deterministic
+behavior before any of those layers are added later, so future changes
+that quietly perturb the antenna-face EIRP path get caught.
+
+Frozen scenarios:
+
+| Name | Configuration |
+| --- | --- |
+| `r23-urban-baseline-small-grid-v1` | urban-baseline preset, seed=20260101, numSnapshots=20, az=-60:20:60, el=-10:2:0, percentiles=[1 5 10 20 50 80 90 95 99] |
+
+The tracked golden artifact lives at:
+
+```
+artifacts/golden/r23_urban_baseline_small_grid_v1/
+  golden_manifest.json    - frozen expected values + tolerances + git SHA
+  metadata.json           - run metadata (provenance + scenario)
+  selfcheck.json          - power-semantics self-check struct
+  scenario_diff.json      - scenario preset / overrides / referenceOnly
+  percentile_summary.csv  - per-percentile min/median/max across the grid
+  validation_summary.txt  - human-readable provenance + status sheet
+```
+
+Run the verifier:
+
+```matlab
+addpath('matlab');
+result = verifyR23GoldenReference("r23-urban-baseline-small-grid-v1");
+```
+
+The verifier rebuilds the named scenario, executes
+`runR23AasEirpCdfGrid`, exports a temporary snapshot, and compares it
+against the tracked golden using two tolerances:
+
+| Field | Tolerance | Why |
+| --- | --- | --- |
+| `observedMaxGridEirp_dBm` | 1e-6 dB | deterministic from a fixed seed |
+| `percentile_summary.csv` values, `maxPercentileAcrossGrid_dBm` | 0.51 dB | values are emitted in 1 dB bin centers; 0.51 dB accommodates half-bin behavior without masking real regressions |
+
+`result` is a struct with `.passed`, a per-field `.summary`, and a
+`.differences` array suitable for diffing.
+
 ## Testing
 
 There is one entry point that runs the full suite and prints a pass / fail
