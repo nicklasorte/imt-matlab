@@ -56,11 +56,11 @@ function params = r23ScenarioPreset(presetName, varargin)
 %   Reference-only metadata (NOT active in EIRP-grid computation):
 %       params.metadata.referenceOnly.networkLoadingFactor = 0.20
 %       params.metadata.referenceOnly.bsTddActivityFactor  = 0.75
-%       params.metadata.referenceOnly.belowRooftopFraction = (preset)
 %
 %       These are stamped for traceability against R23 study assumptions.
 %       The current MVP does not model network loading, TDD activity,
-%       below-rooftop deployment, clutter, or scheduler behaviour.
+%       clutter, rooftop, or scheduler behaviour. Rooftop / clutter /
+%       below-rooftop values are NOT exposed at the preset layer.
 %
 %   Antenna-face EIRP only. No path loss, no clutter, no receiver
 %   antenna, no I/N, no multi-site aggregation, no 19-site / 57-sector
@@ -194,14 +194,15 @@ function params = r23ScenarioPreset(presetName, varargin)
 
     % Reference-only metadata for traceability. These fields are NOT
     % active in the current EIRP-grid computation: the runner does not
-    % apply network loading, TDD activity, or below-rooftop modeling.
+    % apply network loading or TDD activity. Rooftop / clutter /
+    % below-rooftop values are intentionally NOT exposed here -- the
+    % MVP is antenna-face EIRP only.
     refOnly = struct();
     refOnly.notes                  = ['reference-only metadata; ' ...
                                        'NOT active in current ' ...
                                        'antenna-face EIRP-grid run'];
     refOnly.networkLoadingFactor   = params.bs.networkLoadingFactor;
     refOnly.bsTddActivityFactor    = params.bs.tddActivityFactor;
-    refOnly.belowRooftopFraction   = params.deployment.belowRooftopFraction;
     params.metadata.referenceOnly  = refOnly;
 end
 
