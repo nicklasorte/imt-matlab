@@ -751,7 +751,136 @@ deg horizontal coverage, 90-100 deg global-theta vertical coverage) is
 | `out.stats`            | streaming aggregator (counts, sum_lin_mW, min/max, mean_dBm, ...) |
 | `out.percentileMaps`   | per-cell percentile EIRP maps |
 | `out.pointing`         | mean pointing azimuth / elevation per grid cell (degrees) |
-| `out.metadata`         | run metadata: environment, numUesPerSector, maxEirpPerSector_dBm, sourceDefault, no-path-loss caveats |
+| `out.selfCheck`        | power-semantics self-check (`pass`/`warn`/`fail` status, expected vs observed sector / per-beam peak EIRP) |
+| `out.metadata`         | run metadata: environment, numUesPerSector, maxEirpPerSector_dBm, sourceDefault, scenarioPreset / sourceReference (if a preset was used), no-path-loss caveats |
+
+#### R23 scenario presets (reproducible baselines)
+
+`r23ScenarioPreset` is a thin reproducibility / configuration layer on
+top of `r23DefaultParams`. It selects a named, source-grounded R23
+study configuration, stamps explicit scenario / source metadata, and
+forwards optional overrides into the existing nested params struct. It
+is **not** a new propagation model, scheduler, or network-loading
+implementation — it is a way to run named R23-aligned studies
+consistently and to compare runs safely.
+
+```matlab
+% Urban macro baseline (R23 7.125-8.4 GHz)
+params = r23ScenarioPreset("urban-baseline");
+out    = runR23AasEirpCdfGrid(params);
+
+% Suburban macro baseline (R23 7.125-8.4 GHz)
+params = r23ScenarioPreset("suburban-baseline");
+out    = runR23AasEirpCdfGrid(params);
+
+% Lightweight per-call override (e.g. 10 UEs / sector)
+params = r23ScenarioPreset("urban-baseline", ...
+                           "numUesPerSector", 10);
+out    = runR23AasEirpCdfGrid(params);
+```
+
+Canonical preset contents (all source-grounded against the existing
+R23 / ITU-R IMT macro reference):
+
+| field                                       | urban-baseline | suburban-baseline |
+| ------------------------------------------- | -------------- | ----------------- |
+| `params.deployment.environment`             | `urban`        | `suburban`        |
+| `params.deployment.cellRadius_m`            | 400            | 800               |
+| `params.deployment.bsHeight_m`              | 18             | 20                |
+| `params.deployment.bsDensityPerKm2`         | 10             | 2.4               |
+| `params.ue.numUesPerSector`                 | 3              | 3                 |
+| `params.bs.maxEirpPerSector_dBm`            | 78.3           | 78.3              |
+| `params.bs.channelBandwidth_MHz`            | 100            | 100               |
+| `params.sim.randomSeed`                     | 20260101       | 20260102          |
+
+Both presets share the R23 7.125-8.4 GHz Extended AAS macro antenna
+table (8 x 16 sub-array, 6.4 dBi element gain, 90/65 deg beamwidths,
+0.5 / 2.1 / 0.7 lambda spacings, 3 deg sub-array downtilt, 6 deg
+mechanical downtilt) and the 78.3 dBm / 100 MHz sector peak EIRP.
+
+Every preset stamps explicit metadata that propagates into
+`out.metadata`:
+
+| metadata field                              | meaning |
+| ------------------------------------------- | ------- |
+| `metadata.scenarioPreset`                   | canonical preset name |
+| `metadata.scenarioCategory`                 | e.g. `baseline` |
+| `metadata.sourceReference`                  | text reference to R23 source assumptions |
+| `metadata.reproducible`                     | `true` for preset-driven runs |
+| `metadata.presetOverrides`                  | overrides actually applied |
+| `metadata.referenceOnly.networkLoadingFactor` | reference value (NOT active in EIRP-grid run) |
+| `metadata.referenceOnly.bsTddActivityFactor`  | reference value (NOT active in EIRP-grid run) |
+| `metadata.referenceOnly.belowRooftopFraction` | reference value (NOT active in EIRP-grid run) |
+
+> **Note.** `referenceOnly.*` values are stamped purely for traceability
+> against R23 study assumptions. The current MVP does **not** model
+> network loading, TDD activity, below-rooftop deployment, clutter, or
+> scheduler behaviour. These remain antenna-face EIRP runs only.
+
+To compare two scenarios side-by-side:
+
+```matlab
+a = r23ScenarioPreset("urban-baseline");
+b = r23ScenarioPreset("suburban-baseline");
+diff = compareR23ScenarioMetadata(a, b);
+```
+
+`compareR23ScenarioMetadata` returns a struct array of
+`field` / `a` / `b` / `equal` entries for the canonical scenario
+fields and prints a small diff table by default. Pass
+`'Print', false` to suppress the printout.
+
+To exercise the full preset workflow (urban + suburban + diff +
+self-check) end-to-end:
+
+```matlab
+runR23ScenarioPresetExample
+```
+
+This runs both presets through `runR23AasEirpCdfGrid`, renders the
+mean EIRP and pointing-azimuth heatmaps, prints metadata + scenario
+differences + the power-semantics self-check, and saves PNGs under
+`examples/output/r23_scenario_presets/`.
+
+#### Power-semantics self-check
+
+`runR23AasEirpCdfGrid` includes a lightweight runtime self-check that
+guards against future EIRP normalization or aggregation regressions
+(power double-counting, missing per-beam split, etc.). After the
+streaming pass it compares the observed grid maximum to the expected
+sector peak / per-beam peak EIRP and writes the result into
+`out.selfCheck.powerSemantics`:
+
+| field                                   | meaning |
+| --------------------------------------- | ------- |
+| `expectedSectorPeakEirp_dBm`            | sector peak EIRP budget (`maxEirpPerSector_dBm`) |
+| `expectedPerBeamPeakEirp_dBm`           | per-beam peak EIRP (sector peak minus `10*log10(numUesPerSector)` when split) |
+| `observedMaxGridEirp_dBm`               | max of `stats.max_dBm` across the (az, el) grid |
+| `peakShortfall_dB`                      | expected per-beam peak minus observed |
+| `tolerance_dB`                          | numeric slack (default 1e-6 dB) |
+| `warnShortfallThreshold_dB`             | soft-warn threshold (default 3 dB) |
+| `splitSectorPower`                      | echoed input flag |
+| `status`                                | `pass` / `warn` / `fail` |
+| `message`                               | human-readable summary |
+
+Decision rules:
+
+- **HARD FAIL** — `runR23AasEirpCdfGrid` raises
+  `runR23AasEirpCdfGrid:powerSelfCheckFail` if any observed EIRP
+  exceeds the sector peak EIRP budget by more than the tolerance.
+  This indicates a real bug in EIRP normalization / aggregation /
+  per-beam splitting.
+- **SOFT WARN** — `runR23AasEirpCdfGrid` issues
+  `runR23AasEirpCdfGrid:powerSelfCheckWarn` if the observed peak is
+  more than 3 dB below the expected per-beam peak. This is
+  informational only: coarse grids, random steering, and beam
+  splitting may legitimately prevent the sampled grid from landing on
+  the beam peak. The run continues normally.
+- **PASS** — otherwise.
+
+The standalone helper `r23PowerSemanticsSelfCheck` may also be called
+directly with `(observedMax_dBm, sectorEirpDbm, perBeamPeakEirpDbm,
+splitSectorPower)` for unit testing.
 
 ### UE-driven 3-beam sector snapshots
 

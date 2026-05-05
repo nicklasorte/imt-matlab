@@ -66,6 +66,15 @@ function out = runR23AasEirpCdfGrid(varargin)
 %                             .summaryStatistic     'meanAcrossSnapshots'
 %                             .azWrappedConvention  'circular mean atan2d'
 %                             .numSamples           Naz x Nel uint32
+%       .selfCheck          power-semantics self-check struct:
+%                             .powerSemantics       expected vs observed
+%                                                   sector / per-beam peak
+%                                                   EIRP, status field is
+%                                                   'pass' / 'warn' / 'fail'
+%                                                   (HARD FAIL on EIRP
+%                                                    exceeding sector peak,
+%                                                    SOFT WARN on coarse-
+%                                                    grid undershoot).
 %       .percentileTable    optional table from
 %                           export_eirp_percentile_table when
 %                           opts.outputCsvPath is provided.
@@ -293,6 +302,35 @@ function out = runR23AasEirpCdfGrid(varargin)
     % ---- percentile maps --------------------------------------------
     pmaps = eirp_percentile_maps(stats, opts.percentiles);
 
+    % ---- power-semantics self-check ---------------------------------
+    % Continuously validate EIRP normalization to guard against future
+    % power double-counting / aggregation / normalization regressions.
+    %
+    %   - HARD FAIL if the observed grid maximum exceeds the sector
+    %     peak EIRP by more than a small numerical tolerance: that
+    %     means power is being double-counted somewhere.
+    %   - SOFT WARN if the observed peak is well below the expected
+    %     per-beam peak: coarse grids / random steering may not land
+    %     exactly on the beam peak, so this is informational only.
+    %   - PASS otherwise.
+    finiteMaxStats = stats.max_dBm(isfinite(stats.max_dBm));
+    if isempty(finiteMaxStats)
+        observedMax_dBm = -Inf;
+    else
+        observedMax_dBm = max(finiteMaxStats(:));
+    end
+    selfCheck = struct();
+    selfCheck.powerSemantics = r23PowerSemanticsSelfCheck( ...
+        observedMax_dBm, params.sectorEirpDbm, perBeamPeakEirpDbm, ...
+        logical(opts.splitSectorPower));
+    if strcmp(selfCheck.powerSemantics.status, 'fail')
+        error('runR23AasEirpCdfGrid:powerSelfCheckFail', ...
+            '%s', selfCheck.powerSemantics.message);
+    elseif strcmp(selfCheck.powerSemantics.status, 'warn')
+        warning('runR23AasEirpCdfGrid:powerSelfCheckWarn', ...
+            '%s', selfCheck.powerSemantics.message);
+    end
+
     % ---- metadata ---------------------------------------------------
     metadata = struct();
     metadata.generator             = 'runR23AasEirpCdfGrid';
@@ -324,6 +362,29 @@ function out = runR23AasEirpCdfGrid(varargin)
     metadata.computePointingHeatmap = computePointing;
     metadata.pointingSummaryStatistic = nestedParams.sim.pointingSummaryStatistic;
     metadata.sourceDefault         = nestedParams.metadata.sourceDefault;
+    % Propagate scenario preset metadata when present (set by
+    % r23ScenarioPreset). Stays empty/absent for ad-hoc runs.
+    if isfield(nestedParams, 'metadata') && isstruct(nestedParams.metadata)
+        nm = nestedParams.metadata;
+        if isfield(nm, 'scenarioPreset')
+            metadata.scenarioPreset = nm.scenarioPreset;
+        end
+        if isfield(nm, 'scenarioCategory')
+            metadata.scenarioCategory = nm.scenarioCategory;
+        end
+        if isfield(nm, 'sourceReference')
+            metadata.sourceReference = nm.sourceReference;
+        end
+        if isfield(nm, 'reproducible')
+            metadata.reproducible = logical(nm.reproducible);
+        end
+        if isfield(nm, 'presetOverrides')
+            metadata.presetOverrides = nm.presetOverrides;
+        end
+        if isfield(nm, 'referenceOnly')
+            metadata.referenceOnly = nm.referenceOnly;
+        end
+    end
     metadata.includesPathLoss              = false;
     metadata.includesReceiverAntenna       = false;
     metadata.includesReceiverGain          = false;
@@ -348,6 +409,7 @@ function out = runR23AasEirpCdfGrid(varargin)
     out.stats          = stats;
     out.percentileMaps = pmaps;
     out.pointing       = pointing;
+    out.selfCheck      = selfCheck;
     out.metadata       = metadata;
 
     % ---- optional CSV export ----------------------------------------
