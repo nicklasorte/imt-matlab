@@ -236,7 +236,9 @@ function out = runR23AasEirpCdfGrid(varargin)
     numMc         = double(opts.numMc);
 
     tStart = tic;
+    [hWaitbar_ml_mc_chunks,hWaitbarMsgQueue_ml_mc_chunks]= ParForWaitbarCreateMH_time('Number of MC: ',numMc);    %%%%%%% Create ParFor Waitbar, this one covers points and chunks
     for it = 1:numMc
+        it
         beams = imtAasGenerateBeamSet(numBeams, sector);
 
         sectorOut = imtAasSectorEirpGridFromBeams( ...
@@ -265,13 +267,17 @@ function out = runR23AasEirpCdfGrid(varargin)
                      'elapsed=%.2fs ETA=%.2fs\n'], ...
                 it, numMc, 100 * it / numMc, tElapsed, tRemaining);
         end
+        hWaitbarMsgQueue_ml_mc_chunks.send(0);
     end
+    delete(hWaitbarMsgQueue_ml_mc_chunks);
+    close(hWaitbar_ml_mc_chunks);
     stats.elapsedSeconds = toc(tStart);
 
     stats.mean_lin_mW = stats.sum_lin_mW ./ max(stats.numMc, 1);
     stats.mean_dBm    = 10 .* log10(stats.mean_lin_mW);
 
     % ---- pointing summary ------------------------------------------
+    tic;
     if computePointing
         ns = double(pointAgg.numSamples);
         nsSafe = max(ns, 1);
@@ -303,9 +309,13 @@ function out = runR23AasEirpCdfGrid(varargin)
             'elGrid',           elGrid, ...
             'units',            'degrees');
     end
+    tic;
 
     % ---- percentile maps --------------------------------------------
+    'Percentile Maps'
+    tic;
     pmaps = eirp_percentile_maps(stats, opts.percentiles);
+    toc;
 
     % ---- power-semantics self-check ---------------------------------
     % Continuously validate EIRP normalization to guard against future
