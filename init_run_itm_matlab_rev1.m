@@ -126,10 +126,20 @@ end
 % opts.binEdgesDbm = [-100:0.1:120];  %%%%%Default is 1dB
 % opts.percentiles = unique(sort(horzcat([1:1:99],[0.1:0.1:1],[99:0.1:99.9],0.01, 99.99)));
 % %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% % % %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% rev_num=11  %%%%%%%%% 2 Mins
+% opts = struct();
+% opts.numMc = 1000;
+% opts.seed = rev_num;
+% opts.azGridDeg = -120:2:120;
+% opts.elGridDeg = -30:2:30;
+% opts.binEdgesDbm = [-100:0.1:120];  %%%%%Default is 1dB
+% opts.percentiles = unique(sort(horzcat([1:1:99],[0.1:0.1:1],[99:0.1:99.9],0.01, 99.99)));
+% %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % % %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-rev_num=11  %%%%%%%%% Mins
+rev_num=12  %%%%%%%%% 13 Mins
 opts = struct();
-opts.numMc = 1000;
+opts.numMc = 10000;
 opts.seed = rev_num;
 opts.azGridDeg = -120:2:120;
 opts.elGridDeg = -30:2:30;
