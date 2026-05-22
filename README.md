@@ -843,6 +843,105 @@ mean EIRP and pointing-azimuth heatmaps, prints metadata + scenario
 differences + the power-semantics self-check, and saves PNGs under
 `examples/output/r23_scenario_presets/`.
 
+#### AAS geometry presets (R23/ITU default and CTIA 7 GHz 1x6)
+
+`runR23AasEirpCdfGrid` accepts a name-value `aasGeometryPreset`
+argument that selects the radiating-subarray geometry used by the IMT
+AAS EIRP model. This is a **transmit-side antenna change only** — no
+propagation, no clutter, no receiver modeling, no UE uplink, no
+deployment laydown is touched.
+
+```matlab
+% R23/ITU default (unchanged behaviour)
+resultDefault = runR23AasEirpCdfGrid();
+
+% Explicit R23/ITU default
+resultR23 = runR23AasEirpCdfGrid("aasGeometryPreset","r23_1x3_default");
+
+% CTIA 7 GHz 1x6 sensitivity case
+resultCtia = runR23AasEirpCdfGrid("aasGeometryPreset","ctia_7ghz_1x6");
+
+% Custom override
+resultCustom = runR23AasEirpCdfGrid( ...
+    "aasGeometryPreset","custom", ...
+    "arrayRows", 4, ...
+    "arrayCols", 16, ...
+    "subarrayElementRows", 6, ...
+    "subarrayElementCols", 1, ...
+    "subarrayElementVerticalSpacingLambda", 0.7, ...
+    "radiatingSubarrayHorizontalSpacingLambda", 0.5, ...
+    "radiatingSubarrayVerticalSpacingLambda", 4.2, ...
+    "subarrayDowntiltDeg", 3, ...
+    "mechanicalDowntiltDeg", 6, ...
+    "elementGainDbi", 6.4, ...
+    "sectorEirpDbm", 90.8, ...
+    "conductedPowerDbm", 58.6);
+```
+
+`runR23AasEirpCdfGrid()` (no arguments) is exactly equivalent to
+`runR23AasEirpCdfGrid("aasGeometryPreset","r23_1x3_default")`. The
+R23/ITU configuration remains the default model. It represents the
+source-aligned Extended AAS baseline used for WRC-27 sharing studies.
+
+| field                                              | r23_1x3_default | ctia_7ghz_1x6 |
+| -------------------------------------------------- | --------------- | -------------- |
+| `arrayRows`                                        | 8               | 4              |
+| `arrayCols`                                        | 16              | 16             |
+| `subarrayElementRows`                              | 3               | 6              |
+| `subarrayElementCols`                              | 1               | 1              |
+| `subarrayElementVerticalSpacingLambda`             | 0.7             | 0.7            |
+| `radiatingSubarrayHorizontalSpacingLambda`         | 0.5             | 0.5            |
+| `radiatingSubarrayVerticalSpacingLambda`           | 2.1             | 4.2            |
+| `subarrayDowntiltDeg`                              | 3               | 3              |
+| `mechanicalDowntiltDeg`                            | 6               | 6              |
+| `elementGainDbi`                                   | 6.4             | 6.4            |
+| `sectorEirpDbm`                                    | 78.3            | 90.8           |
+| `conductedPowerDbm`                                | 46.1            | 58.6           |
+| total physical elements across two polarizations    | 768             | 768            |
+| `calculatedSubarrayGainDb` (= `10*log10(L)`)        | ~4.77           | ~7.78          |
+| `calculatedArrayGainDb` (= `10*log10(N_H * N_V)`)   | ~21.07          | ~18.06         |
+| `calculatedAntennaGainDbi`                          | ~32.24          | ~32.24         |
+
+The `ctia_7ghz_1x6` preset represents the CTIA 7 GHz AAS
+design/sensitivity case based on the table showing a 4x16 subarray
+configuration, six elements per subarray, 768 total elements across two
+polarizations, approximately 32.2 dBi antenna gain, and approximately
+90.8 dBm total macrocell EIRP at 58.6 dBm conducted power. Note that
+the CTIA preset rebalances the vertical aperture (more elements per
+subarray, fewer radiating subarrays) and increases conducted power /
+sector EIRP — the antenna gain stays at ~32.2 dBi.
+
+The resolved geometry is propagated into `out.metadata.aasGeometry`
+for auditability:
+
+| `out.metadata.aasGeometry` field                    | meaning |
+| --------------------------------------------------- | ------- |
+| `aasGeometryPreset`                                 | canonical preset name |
+| `arrayRows`, `arrayCols`                            | radiating sub-array grid per polarization |
+| `subarrayElementRows`, `subarrayElementCols`        | physical elements inside one sub-array |
+| `subarrayElementVerticalSpacingLambda`              | intra-subarray vertical element spacing [lambda] |
+| `radiatingSubarrayHorizontalSpacingLambda`          | radiating sub-array horizontal spacing [lambda] |
+| `radiatingSubarrayVerticalSpacingLambda`            | radiating sub-array vertical spacing [lambda] |
+| `subarrayDowntiltDeg`, `mechanicalDowntiltDeg`      | electrical / mechanical downtilt [deg] |
+| `elementGainDbi`                                    | single-element absolute gain [dBi] |
+| `calculatedSubarrayGainDb`                          | `10*log10(subarrayElementRows*subarrayElementCols)` |
+| `calculatedArrayGainDb`                             | `10*log10(arrayRows*arrayCols)` |
+| `calculatedAntennaGainDbi`                          | `elementGainDbi + calculatedSubarrayGainDb + calculatedArrayGainDb` |
+| `totalPhysicalElementsAcrossPolarizations`          | `2 * arrayRows * arrayCols * subarrayElementRows * subarrayElementCols` |
+| `sectorEirpDbm`                                     | preset / resolved sector peak EIRP [dBm / 100 MHz] |
+| `totalConductedPowerDbm`                            | preset / resolved total conducted power [dBm] |
+
+The preset layer fails closed on bad input: unknown preset names,
+non-positive / non-integer subarray or array dimensions, non-finite
+spacings or gains, and unknown override field names all raise MATLAB
+errors with stable identifiers.
+
+To run all three presets side-by-side and print the resolved geometry:
+
+```matlab
+runAasGeometryPresetExample
+```
+
 #### Power-semantics self-check
 
 `runR23AasEirpCdfGrid` includes a lightweight runtime self-check that

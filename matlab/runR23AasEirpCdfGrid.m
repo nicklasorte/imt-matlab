@@ -40,6 +40,21 @@ function out = runR23AasEirpCdfGrid(varargin)
 %                             'maxEirpPerSector_dBm', 75, ...
 %                             'environment', 'suburban')
 %
+%   AAS geometry preset (transmit-side antenna only):
+%       runR23AasEirpCdfGrid('aasGeometryPreset', 'r23_1x3_default')
+%           -> source-aligned R23/ITU Extended AAS baseline (default).
+%       runR23AasEirpCdfGrid('aasGeometryPreset', 'ctia_7ghz_1x6')
+%           -> CTIA 7 GHz 1x6 AAS sensitivity case (4x16 sub-array,
+%              6 elements per sub-array, 768 total elements across two
+%              polarizations, ~32.2 dBi antenna gain, ~90.8 dBm sector
+%              EIRP at 58.6 dBm conducted power).
+%       runR23AasEirpCdfGrid('aasGeometryPreset', 'custom', ...
+%                            'arrayRows', 4, 'arrayCols', 16, ...
+%                            'subarrayElementRows', 6, ...)
+%           -> explicit geometry sensitivity. All required geometry
+%              fields must be supplied. See aasGeometryPreset for the
+%              full list of override names.
+%
 %   Power semantics (R23 macro 7.125-8.4 GHz):
 %       maxEirpPerSector_dBm = 78.3   sector peak EIRP [dBm / 100 MHz]
 %       conductedPower_dBm   = 46.1   conducted BS power [dBm / 100 MHz]
@@ -95,7 +110,14 @@ function out = runR23AasEirpCdfGrid(varargin)
 %             plotR23AasPointingHeatmap.
 
     % ---- argument resolution ----------------------------------------
-    [opts, nestedParams] = resolveInputs(varargin);
+    [opts, nestedParams, geom] = resolveInputs(varargin);
+
+    % ---- apply AAS geometry preset to nested params -----------------
+    % The preset selects the radiating-subarray geometry (R23 1x3 default
+    % or CTIA 7 GHz 1x6) and the corresponding sector EIRP / conducted
+    % power. It is purely a transmit-side antenna change: no propagation,
+    % no clutter, no receiver, no laydown is touched.
+    nestedParams = applyGeometryPresetToNested(nestedParams, geom);
 
     params = r23ToImtAasParams(nestedParams);
 
@@ -400,6 +422,32 @@ function out = runR23AasEirpCdfGrid(varargin)
             metadata.referenceOnly = nm.referenceOnly;
         end
     end
+    % ---- resolved AAS geometry preset (auditable) -------------------
+    geomMeta = struct();
+    geomMeta.aasGeometryPreset                          = geom.presetName;
+    geomMeta.arrayRows                                  = double(geom.arrayRows);
+    geomMeta.arrayCols                                  = double(geom.arrayCols);
+    geomMeta.subarrayElementRows                        = double(geom.subarrayElementRows);
+    geomMeta.subarrayElementCols                        = double(geom.subarrayElementCols);
+    geomMeta.subarrayElementVerticalSpacingLambda       = double(geom.subarrayElementVerticalSpacingLambda);
+    geomMeta.radiatingSubarrayHorizontalSpacingLambda   = double(geom.radiatingSubarrayHorizontalSpacingLambda);
+    geomMeta.radiatingSubarrayVerticalSpacingLambda     = double(geom.radiatingSubarrayVerticalSpacingLambda);
+    geomMeta.subarrayDowntiltDeg                        = double(geom.subarrayDowntiltDeg);
+    geomMeta.mechanicalDowntiltDeg                      = double(geom.mechanicalDowntiltDeg);
+    geomMeta.elementGainDbi                             = double(geom.elementGainDbi);
+    geomMeta.calculatedSubarrayGainDb                   = double(geom.calculatedSubarrayGainDb);
+    geomMeta.calculatedArrayGainDb                      = double(geom.calculatedArrayGainDb);
+    geomMeta.calculatedAntennaGainDbi                   = double(geom.calculatedAntennaGainDbi);
+    geomMeta.totalPhysicalElementsAcrossPolarizations   = double(geom.totalPhysicalElementsAcrossPolarizations);
+    if isfield(geom, 'sectorEirpDbm') && ~isempty(geom.sectorEirpDbm)
+        geomMeta.sectorEirpDbm = double(geom.sectorEirpDbm);
+    end
+    if isfield(geom, 'conductedPowerDbm') && ~isempty(geom.conductedPowerDbm)
+        geomMeta.totalConductedPowerDbm = double(geom.conductedPowerDbm);
+    end
+    metadata.aasGeometry                   = geomMeta;
+    metadata.aasGeometryPreset             = geom.presetName;
+
     metadata.includesPathLoss              = false;
     metadata.includesReceiverAntenna       = false;
     metadata.includesReceiverGain          = false;
@@ -445,14 +493,15 @@ end
 
 % =====================================================================
 
-function [opts, nestedParams] = resolveInputs(args)
-%RESOLVEINPUTS Normalize varargin to (flat opts, nested params).
+function [opts, nestedParams, geom] = resolveInputs(args)
+%RESOLVEINPUTS Normalize varargin to (flat opts, nested params, geometry).
 
     nestedParams = [];
     opts = struct();
 
     if isempty(args)
         nestedParams = r23DefaultParams();
+        geom = aasGeometryPreset('r23_1x3_default');
         return;
     end
 
@@ -496,7 +545,10 @@ function [opts, nestedParams] = resolveInputs(args)
         end
     end
 
-    % Apply name-value overrides over the (possibly nested) opts.
+    % Strip geometry-related name-value pairs before storing in opts.
+    [geomPresetName, geomOverrides, rest] = extractGeometryNameValues(rest);
+
+    % Apply remaining name-value overrides over the (possibly nested) opts.
     if ~isempty(rest)
         for k = 1:2:numel(rest)
             nm = rest{k};
@@ -516,6 +568,122 @@ function [opts, nestedParams] = resolveInputs(args)
             looksLikeNestedParams(opts.params)
         nestedParams = opts.params;
         opts = rmfield(opts, 'params');
+    end
+
+    if isempty(geomPresetName)
+        geomPresetName = 'r23_1x3_default';
+    end
+    geomOverrideArgs = structToNameValueCell(geomOverrides);
+    geom = aasGeometryPreset(geomPresetName, geomOverrideArgs{:});
+end
+
+function [presetName, overrides, restOut] = extractGeometryNameValues(rest)
+%EXTRACTGEOMETRYNAMEVALUES Strip geometry NV pairs out of generic rest.
+    presetName = '';
+    overrides  = struct();
+    keep       = true(1, numel(rest));
+
+    geomFieldNames = { ...
+        'arrayRows', 'arrayCols', ...
+        'subarrayElementRows', 'subarrayElementCols', ...
+        'subarrayElementVerticalSpacingLambda', ...
+        'radiatingSubarrayHorizontalSpacingLambda', ...
+        'radiatingSubarrayVerticalSpacingLambda', ...
+        'subarrayDowntiltDeg', 'mechanicalDowntiltDeg', ...
+        'elementGainDbi', ...
+        'sectorEirpDbm', 'conductedPowerDbm'};
+
+    for k = 1:2:numel(rest)-1
+        nm = rest{k};
+        if isstring(nm) && isscalar(nm)
+            nm = char(nm);
+        end
+        if ~ischar(nm)
+            continue;
+        end
+        if strcmpi(nm, 'aasGeometryPreset')
+            v = rest{k+1};
+            if isstring(v) && isscalar(v)
+                v = char(v);
+            end
+            if ~ischar(v)
+                error('runR23AasEirpCdfGrid:badGeometryPreset', ...
+                    'aasGeometryPreset must be a char/string scalar.');
+            end
+            presetName = v;
+            keep(k)   = false;
+            keep(k+1) = false;
+        else
+            for f = 1:numel(geomFieldNames)
+                if strcmp(nm, geomFieldNames{f})
+                    overrides.(geomFieldNames{f}) = rest{k+1};
+                    keep(k)   = false;
+                    keep(k+1) = false;
+                    break;
+                end
+            end
+        end
+    end
+
+    restOut = rest(keep);
+end
+
+function args = structToNameValueCell(s)
+%STRUCTTONAMEVALUECELL Flatten a struct into a {name, value, ...} cell.
+    if ~isstruct(s)
+        args = {};
+        return;
+    end
+    flds = fieldnames(s);
+    args = cell(1, 2 * numel(flds));
+    for k = 1:numel(flds)
+        args{2*k-1} = flds{k};
+        args{2*k}   = s.(flds{k});
+    end
+end
+
+function nestedParams = applyGeometryPresetToNested(nestedParams, geom)
+%APPLYGEOMETRYPRESETTONESTED Push resolved geometry into nestedParams.aas/bs.
+%
+%   Only writes fields that the geometry preset has resolved. The nested
+%   params struct is the single source of truth; downstream conversion
+%   (r23ToImtAasParams) reads it.
+
+    if ~isstruct(nestedParams) || ~isfield(nestedParams, 'aas') || ...
+            ~isstruct(nestedParams.aas)
+        return;
+    end
+
+    a = nestedParams.aas;
+
+    a.numRows                                    = double(geom.arrayRows);
+    a.numColumns                                 = double(geom.arrayCols);
+    a.numElementRowsInSubarray                   = double(geom.subarrayElementRows);
+    a.verticalElementSeparationInSubarray_lambda = double(geom.subarrayElementVerticalSpacingLambda);
+    a.horizontalSpacing_lambda                   = double(geom.radiatingSubarrayHorizontalSpacingLambda);
+    a.verticalSubarraySpacing_lambda             = double(geom.radiatingSubarrayVerticalSpacingLambda);
+    a.subarrayDowntilt_deg                       = double(geom.subarrayDowntiltDeg);
+    a.mechanicalDowntilt_deg                     = double(geom.mechanicalDowntiltDeg);
+    a.elementGain_dBi                            = double(geom.elementGainDbi);
+    a.aasGeometryPreset                          = geom.presetName;
+
+    nestedParams.aas = a;
+
+    % peakGain_dBi is metadata only (EIRP grids are renormalized to the
+    % actual composite-gain peak inside imtAasEirpGrid), so it is left
+    % alone here. The calculated antenna gain is surfaced via
+    % out.metadata.aasGeometry.calculatedAntennaGainDbi.
+    if isfield(nestedParams, 'bs') && isstruct(nestedParams.bs)
+        b = nestedParams.bs;
+        if isfield(geom, 'sectorEirpDbm') && ~isempty(geom.sectorEirpDbm) && ...
+                isfinite(geom.sectorEirpDbm)
+            b.maxEirpPerSector_dBm = double(geom.sectorEirpDbm);
+        end
+        if isfield(geom, 'conductedPowerDbm') && ~isempty(geom.conductedPowerDbm) && ...
+                isfinite(geom.conductedPowerDbm)
+            b.conductedPower_dBm = double(geom.conductedPowerDbm);
+        end
+        nestedParams.bs = b;
     end
 end
 
