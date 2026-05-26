@@ -29,6 +29,20 @@ function out = runR23AasEirpCdfGrid(varargin)
 %        opts.outputCsvPath, opts.outputMetadataPath,
 %        opts.numUesPerSector, opts.maxEirpPerSector_dBm,
 %        opts.environment, opts.computePointingHeatmap.
+%      The flat OPTS struct also accepts the same AAS geometry fields as
+%      the name-value form:
+%        opts.aasGeometryPreset,
+%        opts.arrayRows, opts.arrayCols,
+%        opts.subarrayElementRows, opts.subarrayElementCols,
+%        opts.subarrayElementVerticalSpacingLambda,
+%        opts.radiatingSubarrayHorizontalSpacingLambda,
+%        opts.radiatingSubarrayVerticalSpacingLambda,
+%        opts.subarrayDowntiltDeg, opts.mechanicalDowntiltDeg,
+%        opts.elementGainDbi,
+%        opts.sectorEirpDbm, opts.conductedPowerDbm.
+%      When both the flat-opts and name-value forms supply the same
+%      geometry field in one call, the name-value form wins (matches the
+%      override-merge semantics used for the non-geometry fields).
 %
 %   2) Nested PARAMS struct as built by r23DefaultParams. The runner
 %      auto-detects fields .deployment / .ue / .bs / .aas / .sim and
@@ -545,6 +559,15 @@ function [opts, nestedParams, geom] = resolveInputs(args)
         end
     end
 
+    % Strip geometry-related fields out of the flat OPTS struct and
+    % convert them to the name-value form the existing geometry path
+    % already consumes. They are prepended to `rest` so that any explicit
+    % name-value override later in the same call wins (later wins inside
+    % extractGeometryNameValues). This keeps the flat-opts and name-value
+    % invocation styles bit-equivalent for identical inputs.
+    [optsGeomNv, opts] = extractGeometryNvFromOpts(opts);
+    rest = [optsGeomNv, rest];
+
     % Strip geometry-related name-value pairs before storing in opts.
     [geomPresetName, geomOverrides, rest] = extractGeometryNameValues(rest);
 
@@ -575,6 +598,43 @@ function [opts, nestedParams, geom] = resolveInputs(args)
     end
     geomOverrideArgs = structToNameValueCell(geomOverrides);
     geom = aasGeometryPreset(geomPresetName, geomOverrideArgs{:});
+end
+
+function [geomNv, opts] = extractGeometryNvFromOpts(opts)
+%EXTRACTGEOMETRYNVFROMOPTS Strip geometry-related fields out of flat opts.
+%
+%   [GEOMNV, OPTS] = extractGeometryNvFromOpts(OPTS)
+%
+%   Pulls the AAS geometry preset name and per-field geometry overrides
+%   out of the flat OPTS struct, returns them as a {name, value, ...}
+%   cell array in canonical order (aasGeometryPreset first), and removes
+%   them from OPTS. The cell array is fed into the same
+%   extractGeometryNameValues path used for the name-value invocation,
+%   so both invocation styles reach identical internal geometry state.
+    geomNv = {};
+    if ~isstruct(opts)
+        return;
+    end
+
+    geomFieldNames = { ...
+        'aasGeometryPreset', ...
+        'arrayRows', 'arrayCols', ...
+        'subarrayElementRows', 'subarrayElementCols', ...
+        'subarrayElementVerticalSpacingLambda', ...
+        'radiatingSubarrayHorizontalSpacingLambda', ...
+        'radiatingSubarrayVerticalSpacingLambda', ...
+        'subarrayDowntiltDeg', 'mechanicalDowntiltDeg', ...
+        'elementGainDbi', ...
+        'sectorEirpDbm', 'conductedPowerDbm'};
+
+    for k = 1:numel(geomFieldNames)
+        fld = geomFieldNames{k};
+        if isfield(opts, fld)
+            geomNv{end+1} = fld;          %#ok<AGROW>
+            geomNv{end+1} = opts.(fld);   %#ok<AGROW>
+            opts = rmfield(opts, fld);
+        end
+    end
 end
 
 function [presetName, overrides, restOut] = extractGeometryNameValues(rest)
