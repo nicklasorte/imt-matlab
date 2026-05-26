@@ -56,11 +56,27 @@ function compositeGainDbi = imtAasCompositeGain(azGridDeg, elGridDeg, ...
     [steerAzPanel, steerElPanel] = ...
         imt_aas_mechanical_tilt_transform(steerAzDeg, steerElDeg, tiltDeg);
 
+    % imtAasNormalizeGrid maps two same-length 1xN row vectors to an NxN
+    % outer-product grid (its documented behavior for independent axes).
+    % After Normalize+tilt above, AZpanel/ELpanel are already paired, so
+    % we reshape any [1xN] pair to columns to force the downstream
+    % Normalize inside imtAasArrayFactor onto its "pass-through" branch.
+    outShape = size(AZpanel);
+    reshapeForArrayFactor = isvector(AZpanel) && ~isscalar(AZpanel) ...
+        && size(AZpanel, 1) == 1;
+    if reshapeForArrayFactor
+        AZpanel = AZpanel(:);
+        ELpanel = ELpanel(:);
+    end
+
     elementDb = imtAasElementPattern(AZpanel, ELpanel, params);
     arrayDb   = imtAasArrayFactor( ...
         AZpanel, ELpanel, steerAzPanel, steerElPanel, params);
 
     compositeGainDbi = elementDb + arrayDb;
+    if reshapeForArrayFactor
+        compositeGainDbi = reshape(compositeGainDbi, outShape);
+    end
 end
 
 % =====================================================================

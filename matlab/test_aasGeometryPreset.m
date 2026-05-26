@@ -15,8 +15,13 @@ function results = test_aasGeometryPreset()
 %            for a deterministic small run.
 %       T9.  runR23AasEirpCdfGrid('aasGeometryPreset','ctia_7ghz_1x6')
 %            runs cleanly and reports the CTIA preset / geometry in metadata.
-%       T10. CTIA preset elevation pattern differs from R23 default for the
-%            same steering direction (different vertical aperture).
+%       T10. CTIA preset and R23 default produce IDENTICAL elevation
+%            patterns at the same steering direction: both presets
+%            describe the same 24-element uniform 0.7-lambda vertical
+%            aperture (R23: 8 subarrays x 3 elements at 2.1 lambda;
+%            CTIA: 4 subarrays x 6 elements at 4.2 lambda = 6 * 0.7),
+%            so the M.2101 separable AF x SubArrayF model collapses to
+%            the same total pattern when rho = 1.
 %       T11. Invalid preset name raises an error.
 %       T12. Negative subarrayElementRows raises an error.
 %       T13. Non-integer subarrayElementRows raises an error.
@@ -213,12 +218,20 @@ function r = t_pattern_differs(r)
     g23  = imtAasCompositeGain(az, el, 0, -9, p23);
     gCti = imtAasCompositeGain(az, el, 0, -9, pCtia);
 
-    % The two presets share the same 32.2 dBi peak but have different
-    % vertical apertures, so the elevation pattern shape MUST differ.
-    sameShape = all(abs(g23(:) - gCti(:)) < 1e-6);
-    finite = all(isfinite(g23(:))) && all(isfinite(gCti(:)));
-    r = check(r, ~sameShape && finite, ...
-        'T10: CTIA elevation pattern differs from R23 default at steerEl=-9');
+    % R23 (N_V=8, L=3, d_V=2.1 lambda) and CTIA (N_V=4, L=6,
+    % d_V=4.2 lambda) both describe the same 24-element uniform
+    % 0.7-lambda vertical aperture because L * d_sub = d_V holds for
+    % both. With rho = 1, the M.2101 separable AF x SubArrayF product
+    % factors into a single 24-element uniform-array sum, so the two
+    % elevation patterns are mathematically identical (to numerical
+    % round-off). This invariant catches regressions in the AF/SubAF
+    % normalization or in how subarray downtilt is applied.
+    maxAbsDiff = max(abs(g23(:) - gCti(:)));
+    identicalPattern = maxAbsDiff < 1e-6;
+    finiteOk = all(isfinite(g23(:))) && all(isfinite(gCti(:)));
+    r = check(r, identicalPattern && finiteOk, sprintf( ...
+        ['T10: CTIA and R23 default produce identical elevation ' ...
+         'patterns at steerEl=-9 (max abs diff = %.2e dB)'], maxAbsDiff));
 end
 
 % =====================================================================
