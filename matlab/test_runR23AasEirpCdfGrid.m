@@ -17,6 +17,9 @@ function results = test_runR23AasEirpCdfGrid()
 %       T9.  No output / metadata fields advertise path loss, receiver
 %            gain, or I / N.
 %       T10. Deterministic seed gives repeatable percentile maps.
+%       T11. Flat-opts struct accepts opts.aasGeometryPreset (and the
+%            other geometry override fields) and reaches identical
+%            internal state to the equivalent name-value invocation.
 %
 %   Returns struct with .passed (logical) and .summary (cellstr).
 
@@ -33,6 +36,7 @@ function results = test_runR23AasEirpCdfGrid()
     results = t_metadata_says_r23(results);
     results = t_no_path_loss_fields(results);
     results = t_seed_repeatable(results);
+    results = t_flat_opts_geometry_preset(results);
 
     fprintf('\n--- test_runR23AasEirpCdfGrid summary ---\n');
     for k = 1:numel(results.summary)
@@ -222,6 +226,62 @@ function r = t_seed_repeatable(r)
 
     r = check(r, okEq && okDiff, ...
         'T10: same seed -> identical maps; different seed -> different maps');
+end
+
+% =====================================================================
+% T11: flat-opts struct accepts aasGeometryPreset + geometry overrides
+% =====================================================================
+function r = t_flat_opts_geometry_preset(r)
+    rev_num = 42;
+
+    opts = struct();
+    opts.aasGeometryPreset = 'ctia_7ghz_1x6';
+    opts.numMc             = 10;
+    opts.seed              = rev_num;
+    opts.azGridDeg         = -120:2:120;
+    opts.elGridDeg         = -30:2:30;
+    opts.binEdgesDbm       = -100:0.1:120;
+    opts.percentiles       = unique(sort(horzcat( ...
+                                 1:1:99, 0.1:0.1:1, ...
+                                 99:0.1:99.9, 0.01, 99.99)));
+
+    outFlat = runR23AasEirpCdfGrid(opts);
+
+    g = outFlat.metadata.aasGeometry;
+    okPreset  = strcmp(g.aasGeometryPreset, 'ctia_7ghz_1x6');
+    okSector  = isfield(g, 'sectorEirpDbm') && ...
+                abs(g.sectorEirpDbm - 90.8) < 1e-6;
+    okCond    = isfield(g, 'totalConductedPowerDbm') && ...
+                abs(g.totalConductedPowerDbm - 58.6) < 1e-6;
+
+    pcStatus  = outFlat.selfCheck.powerSemantics.status;
+    okStatus  = strcmp(pcStatus, 'pass') || strcmp(pcStatus, 'warn');
+
+    % Equivalent name-value invocation must reach identical internal
+    % state (same seed, same RNG sequence, same loop, same aggregator).
+    outNV = runR23AasEirpCdfGrid( ...
+        'aasGeometryPreset', 'ctia_7ghz_1x6', ...
+        'numMc',             opts.numMc, ...
+        'seed',              opts.seed, ...
+        'azGridDeg',         opts.azGridDeg, ...
+        'elGridDeg',         opts.elGridDeg, ...
+        'binEdgesDbm',       opts.binEdgesDbm, ...
+        'percentiles',       opts.percentiles);
+
+    meanDelta = abs(outFlat.stats.mean_dBm - outNV.stats.mean_dBm);
+    finiteIdx = isfinite(meanDelta);
+    okEquiv = all(meanDelta(finiteIdx) < 1e-9) && ...
+              isequal(isfinite(outFlat.stats.mean_dBm), ...
+                      isfinite(outNV.stats.mean_dBm));
+
+    ok = okPreset && okSector && okCond && okStatus && okEquiv;
+    r = check(r, ok, sprintf( ...
+        ['T11: flat opts.aasGeometryPreset reaches identical state to ' ...
+         'name-value form (preset=%s, sectorEirp=%.4f, ' ...
+         'conducted=%.4f, selfCheck=%s, max|deltaMean|=%.3g)'], ...
+        g.aasGeometryPreset, g.sectorEirpDbm, ...
+        g.totalConductedPowerDbm, pcStatus, ...
+        max([meanDelta(finiteIdx); 0])));
 end
 
 % =====================================================================
