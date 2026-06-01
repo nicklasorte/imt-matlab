@@ -135,6 +135,15 @@ function out = runR23AasEirpCdfGrid(varargin)
 
     params = r23ToImtAasParams(nestedParams);
 
+    % ---- output frame (non-breaking; default 'global') --------------
+    % Resolve + validate opts.outputFrame and propagate it as
+    % params.observationFrame so it rides the params struct down through
+    % imtAasSectorEirpGridFromBeams -> imtAasEirpGrid -> imtAasCompositeGain.
+    %   'global' (default) / 'sector' (alias) -> curved sector-frame maps
+    %   'panel'                               -> flat panel-frame maps
+    opts.outputFrame = resolveOutputFrame(opts);
+    params.observationFrame = opts.outputFrame;
+
     % ---- resolve opts with defaults ----------------------------------
     if ~isfield(opts, 'maxEirpPerSector_dBm') || isempty(opts.maxEirpPerSector_dBm)
         opts.maxEirpPerSector_dBm = nestedParams.bs.maxEirpPerSector_dBm;
@@ -410,6 +419,7 @@ function out = runR23AasEirpCdfGrid(varargin)
     metadata.subarrayDowntiltDeg   = params.subarrayDowntiltDeg;
     metadata.seed                  = opts.seed;
     metadata.randomSeed            = opts.seed;
+    metadata.outputFrame           = opts.outputFrame;
     metadata.computePointingHeatmap = computePointing;
     metadata.pointingSummaryStatistic = nestedParams.sim.pointingSummaryStatistic;
     metadata.sourceDefault         = nestedParams.metadata.sourceDefault;
@@ -795,6 +805,33 @@ function validateNumMc(N)
             N == floor(N))
         error('runR23AasEirpCdfGrid:badNumMc', ...
             'numMc / numSnapshots must be a positive integer.');
+    end
+end
+
+function frame = resolveOutputFrame(opts)
+%RESOLVEOUTPUTFRAME Read + validate the optional opts.outputFrame field.
+%   Default 'global'. Allowed (case-insensitive): 'global', 'sector'
+%   (alias of global), 'panel'. Errors with id
+%   'runR23AasEirpCdfGrid:invalidOutputFrame' on any other value.
+    frame = 'global';
+    if isstruct(opts) && isfield(opts, 'outputFrame') && ~isempty(opts.outputFrame)
+        frame = opts.outputFrame;
+    end
+    if isstring(frame) && isscalar(frame)
+        frame = char(frame);
+    end
+    if ~ischar(frame)
+        error('runR23AasEirpCdfGrid:invalidOutputFrame', ...
+            'opts.outputFrame must be a char/string scalar.');
+    end
+    frame = lower(frame);
+    switch frame
+        case {'global', 'sector', 'panel'}
+            % ok
+        otherwise
+            error('runR23AasEirpCdfGrid:invalidOutputFrame', ...
+                ['opts.outputFrame must be one of ''global'', ''sector'', ', ...
+                 '''panel'' (got ''%s'').'], frame);
     end
 end
 
