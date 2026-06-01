@@ -105,27 +105,52 @@ function results = verify_output_frame_flatness(outDir)
     pass = pass && (sMcP <= 2 * 2) && (sMcG >= 6) && (sMcG >= sMcP + 4);
 
     % ========================= PLOTS ====================================
+    % Seven PNGs are written to OUTDIR:
+    %   det_global.png / det_panel.png            R23-default deterministic EIRP
+    %   mc_global_p50.png / mc_panel_p50.png      Monte-Carlo p50 EIRP
+    %   det_ctia_global.png / det_ctia_panel.png  ctia deterministic gain
+    %   compare_frames.png                        combined 2x2 (det EIRP + mc p50)
+
+    % (1-2) Deterministic R23-default EIRP maps [dBm / 100 MHz].
+    cfgRG = cfgR; cfgRG.observationFrame = 'global';
+    cfgRP = cfgR; cfgRP.observationFrame = 'panel';
+    eRG = imt_r23_aas_eirp_grid(az, el, cfgRG);
+    eRP = imt_r23_aas_eirp_grid(az, el, cfgRP);
+    ZdetG = eRG.eirp_dBm_per100MHz;
+    ZdetP = eRP.eirp_dBm_per100MHz;
+    detEirpClim = [ZdetG(:); ZdetP(:)];
+    saveMap(ZdetG, az, el, 'Deterministic EIRP - global (curved)', ...
+        fullfile(outDir, 'det_global.png'), detEirpClim, 'EIRP [dBm]');
+    saveMap(ZdetP, az, el, 'Deterministic EIRP - panel (flat)', ...
+        fullfile(outDir, 'det_panel.png'),  detEirpClim, 'EIRP [dBm]');
+
+    % (3-4) Monte-Carlo p50 EIRP maps [dBm].
+    mcClimData = [p50G(:); p50P(:)];
     saveMap(p50G, az, el, 'Monte-Carlo p50 EIRP - global (curved)', ...
-        fullfile(outDir, 'mc_global_p50.png'), [p50G(:); p50P(:)], 'EIRP [dBm]');
+        fullfile(outDir, 'mc_global_p50.png'), mcClimData, 'EIRP [dBm]');
     saveMap(p50P, az, el, 'Monte-Carlo p50 EIRP - panel (flat)', ...
-        fullfile(outDir, 'mc_panel_p50.png'),  [p50G(:); p50P(:)], 'EIRP [dBm]');
+        fullfile(outDir, 'mc_panel_p50.png'),  mcClimData, 'EIRP [dBm]');
 
-    cfgG = cfgC; cfgG.observationFrame = 'global';
-    cfgP = cfgC; cfgP.observationFrame = 'panel';
-    dG = imt_r23_aas_eirp_grid(az, el, cfgG);
-    dP = imt_r23_aas_eirp_grid(az, el, cfgP);
-    saveMap(dG.gain_dBi, az, el, 'Deterministic ctia gain - global (curved)', ...
-        fullfile(outDir, 'det_global.png'), [dG.gain_dBi(:); dP.gain_dBi(:)], 'Gain [dBi]');
-    saveMap(dP.gain_dBi, az, el, 'Deterministic ctia gain - panel (flat)', ...
-        fullfile(outDir, 'det_panel.png'),  [dG.gain_dBi(:); dP.gain_dBi(:)], 'Gain [dBi]');
+    % (5-6) Deterministic ctia-geometry composite-gain maps [dBi] (finer el).
+    elCtia = -30:1:30;
+    cfgCG = cfgC; cfgCG.observationFrame = 'global';
+    cfgCP = cfgC; cfgCP.observationFrame = 'panel';
+    dCG = imt_r23_aas_eirp_grid(az, elCtia, cfgCG);
+    dCP = imt_r23_aas_eirp_grid(az, elCtia, cfgCP);
+    detGainClim = [dCG.gain_dBi(:); dCP.gain_dBi(:)];
+    saveMap(dCG.gain_dBi, az, elCtia, 'Deterministic ctia gain - global (curved)', ...
+        fullfile(outDir, 'det_ctia_global.png'), detGainClim, 'Gain [dBi]');
+    saveMap(dCP.gain_dBi, az, elCtia, 'Deterministic ctia gain - panel (flat)', ...
+        fullfile(outDir, 'det_ctia_panel.png'),  detGainClim, 'Gain [dBi]');
 
+    % (7) Combined 2x2: deterministic EIRP (top) + Monte-Carlo p50 (bottom).
     f = figure('Visible', 'off', 'Position', [100 100 1200 800]);
-    detClim = [min([dG.gain_dBi(:); dP.gain_dBi(:)]) max([dG.gain_dBi(:); dP.gain_dBi(:)])];
-    mcClim  = [min([p50G(:); p50P(:)]) max([p50G(:); p50P(:)])];
-    subplot(2,2,1); paintMap(dG.gain_dBi, az, el, 'det global (curved)', detClim, 'Gain [dBi]');
-    subplot(2,2,2); paintMap(dP.gain_dBi, az, el, 'det panel (flat)',   detClim, 'Gain [dBi]');
-    subplot(2,2,3); paintMap(p50G, az, el, 'mc p50 global (curved)', mcClim, 'EIRP [dBm]');
-    subplot(2,2,4); paintMap(p50P, az, el, 'mc p50 panel (flat)',   mcClim, 'EIRP [dBm]');
+    detClim = [min(detEirpClim) max(detEirpClim)];
+    mcClim  = [min(mcClimData)  max(mcClimData)];
+    subplot(2,2,1); paintMap(ZdetG, az, el, 'det global (curved)', detClim, 'EIRP [dBm]');
+    subplot(2,2,2); paintMap(ZdetP, az, el, 'det panel (flat)',   detClim, 'EIRP [dBm]');
+    subplot(2,2,3); paintMap(p50G,  az, el, 'mc p50 global (curved)', mcClim, 'EIRP [dBm]');
+    subplot(2,2,4); paintMap(p50P,  az, el, 'mc p50 panel (flat)',   mcClim, 'EIRP [dBm]');
     exportgraphics(f, fullfile(outDir, 'compare_frames.png'), 'Resolution', 120);
     close(f);
 
