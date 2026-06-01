@@ -51,10 +51,31 @@ function compositeGainDbi = imtAasCompositeGain(azGridDeg, elGridDeg, ...
         tiltDeg = 0;
     end
 
-    % Sector -> panel frame for both observation grid and steering.
-    [AZpanel, ELpanel] = imt_aas_mechanical_tilt_transform(AZ, EL, tiltDeg);
+    % Observation-frame selection (non-breaking; default 'global').
+    %   'global'/'sector' -> rotate the observation grid into the panel
+    %                        frame (historical behavior, byte-identical).
+    %   'panel'           -> treat the supplied az/el as already panel-frame
+    %                        (skip the observation-grid rotation).
+    obsFrame = resolveObservationFrame(params, 'imtAasCompositeGain');
+
+    % The BEAM-STEERING direction is ALWAYS rotated from the sector frame
+    % into the panel frame, regardless of the observation-frame choice.
     [steerAzPanel, steerElPanel] = ...
         imt_aas_mechanical_tilt_transform(steerAzDeg, steerElDeg, tiltDeg);
+
+    switch obsFrame
+        case {'global', 'sector'}
+            % Sector -> panel frame for the observation grid. This is the
+            % identical transform line used historically, so the default
+            % numeric output is unchanged.
+            [AZpanel, ELpanel] = ...
+                imt_aas_mechanical_tilt_transform(AZ, EL, tiltDeg);
+        case 'panel'
+            % Un-rotated (flat) frame: the supplied az/el are interpreted
+            % as panel-frame directions, so skip the observation rotation.
+            AZpanel = AZ;
+            ELpanel = EL;
+    end
 
     % imtAasNormalizeGrid maps two same-length 1xN row vectors to an NxN
     % outer-product grid (its documented behavior for independent axes).
@@ -80,6 +101,34 @@ function compositeGainDbi = imtAasCompositeGain(azGridDeg, elGridDeg, ...
 end
 
 % =====================================================================
+
+function frame = resolveObservationFrame(params, funcName)
+%RESOLVEOBSERVATIONFRAME Read + validate the optional observationFrame field.
+%   Default 'global'. Allowed (case-insensitive): 'global', 'sector'
+%   (alias of global), 'panel'. Errors with id
+%   '<funcName>:invalidObservationFrame' on any other value.
+    frame = 'global';
+    if isstruct(params) && isfield(params, 'observationFrame') && ...
+            ~isempty(params.observationFrame)
+        frame = params.observationFrame;
+    end
+    if isstring(frame) && isscalar(frame)
+        frame = char(frame);
+    end
+    if ~ischar(frame)
+        error([funcName ':invalidObservationFrame'], ...
+            'observationFrame must be a char/string scalar.');
+    end
+    frame = lower(frame);
+    switch frame
+        case {'global', 'sector', 'panel'}
+            % ok
+        otherwise
+            error([funcName ':invalidObservationFrame'], ...
+                ['observationFrame must be one of ''global'', ''sector'', ', ...
+                 '''panel'' (got ''%s'').'], frame);
+    end
+end
 
 function validateSteerAngle(value, lo, hi, name)
     if ~(isnumeric(value) && isreal(value) && isscalar(value) && isfinite(value))

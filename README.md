@@ -725,6 +725,43 @@ Recognised flat `opts` fields and name-value keys (all optional):
 | `progressEvery`           | `0`                              | print progress every N draws |
 | `outputCsvPath`           | `''`                             | optional `p000:p100` table CSV |
 | `outputMetadataPath`      | `''`                             | optional JSON / text metadata sidecar |
+| `outputFrame`             | `'global'`                       | observation-grid frame: `'global'` (curved, default), `'sector'` (alias of global), or `'panel'` (flat); case-insensitive |
+
+#### Observation frame: `'global'` (curved, default) vs `'panel'` (flat)
+
+By default the per-direction EIRP maps are reported in the **sector /
+global frame** (`outputFrame = 'global'`, alias `'sector'`). In that frame
+the mechanical downtilt is applied as a coordinate **rotation** of the
+observation grid into the panel's local frame (ITU-R IMT characteristics
+Note 8 / 3GPP TR 36.814 A.2.1.6.2). This is correct and standards-
+conformant, and is why iso-gain / null bands appear **curved** across
+azimuth: a feature that sits at a fixed panel elevation maps to an azimuth-
+dependent sector elevation. The default is unchanged.
+
+Set `outputFrame = 'panel'` to opt into the **un-rotated panel (local)
+frame**. The supplied `az`/`el` axes are then interpreted as already being
+panel-frame directions, so the observation-grid rotation is skipped and the
+same features come out **flat** (constant elevation across azimuth). No
+interpolation and no `NaN` filling is introduced — only the frame that the
+`az`/`el` axes *label* changes.
+
+```matlab
+opts = struct();
+opts.aasGeometryPreset = 'ctia_7ghz_1x6';
+opts.outputFrame       = 'panel';        % flat panel-frame maps
+result = runR23AasEirpCdfGrid(opts);
+% result.metadata.outputFrame -> 'panel'
+```
+
+Important: the gain at any given **physical** direction is identical in
+both frames — the electronic beam steering is always rotated from the
+sector frame regardless of the choice, so only the observation grid is
+affected. Note that in the panel frame `el = 0` is the *tilted boresight*,
+so bands sit roughly `mechanicalDowntiltDeg` degrees away from where a
+sector-frame reference would place them. Omitting `outputFrame` behaves
+exactly as before. The same field is honored on the deterministic path via
+`cfg.observationFrame = 'panel'` for `imt_r23_aas_eirp_grid` (and on the
+`imtAas*` primitives via `params.observationFrame`).
 
 #### Suburban macro defaults (vs urban)
 

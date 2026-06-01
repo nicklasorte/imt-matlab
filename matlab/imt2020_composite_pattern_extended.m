@@ -101,9 +101,29 @@ function [gain_dBi, rawGain_dBi, rawPeak_dBi] = ...
 
     tilt = cfg.mechanicalDowntiltDeg;
 
+    % Observation-frame selection (non-breaking; default 'global').
+    %   'global'/'sector' -> rotate the observation grid into the panel
+    %                        frame (historical behavior, byte-identical).
+    %   'panel'           -> treat the supplied az/el as already panel-frame
+    %                        (skip the observation-grid rotation).
+    obsFrame = resolveObservationFrame(cfg, ...
+        'imt2020_composite_pattern_extended');
+
     % --- map observation + beam directions into panel frame ----------
-    [azP,   elP  ] = imt_aas_mechanical_tilt_transform(azim,   elev,   tilt);
+    % The BEAM-STEERING direction is ALWAYS rotated from the sector frame
+    % into the panel frame; only the observation grid is affected by the
+    % frame choice.
     [azP_i, elP_i] = imt_aas_mechanical_tilt_transform(azim_i, elev_i, tilt);
+    switch obsFrame
+        case {'global', 'sector'}
+            % Identical transform line used historically -> byte-identical
+            % default output.
+            [azP, elP] = imt_aas_mechanical_tilt_transform(azim, elev, tilt);
+        case 'panel'
+            % Un-rotated (flat) frame: supplied az/el already panel-frame.
+            azP = azim;
+            elP = elev;
+    end
 
     % evaluate the raw extended gain at the requested grid ...
     rawGain_dBi = evalRawExtended(azP, elP, azP_i, elP_i, cfg);
@@ -115,6 +135,36 @@ function [gain_dBi, rawGain_dBi, rawPeak_dBi] = ...
         gain_dBi = rawGain_dBi - rawPeak_dBi + cfg.peakGain_dBi;
     else
         gain_dBi = rawGain_dBi;
+    end
+end
+
+% =====================================================================
+
+function frame = resolveObservationFrame(cfg, funcName)
+%RESOLVEOBSERVATIONFRAME Read + validate the optional observationFrame field.
+%   Default 'global'. Allowed (case-insensitive): 'global', 'sector'
+%   (alias of global), 'panel'. Errors with id
+%   '<funcName>:invalidObservationFrame' on any other value.
+    frame = 'global';
+    if isstruct(cfg) && isfield(cfg, 'observationFrame') && ...
+            ~isempty(cfg.observationFrame)
+        frame = cfg.observationFrame;
+    end
+    if isstring(frame) && isscalar(frame)
+        frame = char(frame);
+    end
+    if ~ischar(frame)
+        error([funcName ':invalidObservationFrame'], ...
+            'observationFrame must be a char/string scalar.');
+    end
+    frame = lower(frame);
+    switch frame
+        case {'global', 'sector', 'panel'}
+            % ok
+        otherwise
+            error([funcName ':invalidObservationFrame'], ...
+                ['observationFrame must be one of ''global'', ''sector'', ', ...
+                 '''panel'' (got ''%s'').'], frame);
     end
 end
 
