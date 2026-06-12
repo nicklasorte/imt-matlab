@@ -28,7 +28,8 @@ function out = runR23AasEirpCdfGrid(varargin)
 %        opts.splitSectorPower, opts.progressEvery, opts.mcChunkSize,
 %        opts.outputCsvPath, opts.outputMetadataPath,
 %        opts.numUesPerSector, opts.maxEirpPerSector_dBm,
-%        opts.environment, opts.computePointingHeatmap.
+%        opts.environment, opts.computePointingHeatmap,
+%        opts.beamSelection, opts.codebookOversample.
 %      The flat OPTS struct also accepts the same AAS geometry fields as
 %      the name-value form:
 %        opts.aasGeometryPreset,
@@ -68,6 +69,27 @@ function out = runR23AasEirpCdfGrid(varargin)
 %           -> explicit geometry sensitivity. All required geometry
 %              fields must be supplied. See aasGeometryPreset for the
 %              full list of override names.
+%
+%   Beam selection (non-breaking; default 'ideal'):
+%       runR23AasEirpCdfGrid('beamSelection', 'codebook', ...
+%                            'codebookOversample', [4 4])
+%       opts.beamSelection ('ideal' | 'codebook', default 'ideal'):
+%           'ideal'    -> each beam points exactly at its served UE
+%                         (continuous steering; historical behavior,
+%                          byte-identical default).
+%           'codebook' -> each beam is snapped to the nearest 3GPP
+%                         TS 38.214 v19.2.0 Sec. 5.2.2.2.1 Type I
+%                         single-panel oversampled-DFT (PMI) codebook
+%                         beam, i.e. the quantized beam a real gNB would
+%                         form from a reported PMI. Applied in the PANEL
+%                         frame after the mechanical-tilt transform
+%                         inside imtAasArrayFactor.
+%       opts.codebookOversample: positive integer scalar or [O_H O_V]
+%           pair, default [4 4] (TS 38.214 Table 5.2.2.2.1-2 default).
+%       Surfaced in out.metadata.beamSelection / out.metadata.beamCodebook.
+%       See imt_aas_dft_codebook / imt_aas_codebook_select for the
+%       construction, the max-gain == nearest-bin property, and the
+%       aliasing (grating lobe) caveat for the d_V = 2.1 lambda stack.
 %
 %   Power semantics (R23 macro 7.125-8.4 GHz):
 %       maxEirpPerSector_dBm = 78.3   sector peak EIRP [dBm / 100 MHz]
@@ -143,6 +165,19 @@ function out = runR23AasEirpCdfGrid(varargin)
     %   'panel'                               -> flat panel-frame maps
     opts.outputFrame = resolveOutputFrame(opts);
     params.observationFrame = opts.outputFrame;
+
+    % ---- beam selection (non-breaking; default 'ideal') --------------
+    % Resolve + validate opts.beamSelection / opts.codebookOversample and
+    % propagate the result as params.beamCodebook so it rides the params
+    % struct down through imtAasSectorEirpGridFromBeams -> imtAasEirpGrid
+    % -> imtAasCompositeGain -> imtAasArrayFactor, where the PANEL-FRAME
+    % steering spatial frequencies are snapped to the Type I DFT grid
+    % (after the mechanical-tilt transform, so the codebook is fixed to
+    % the array as on real hardware).
+    %   'ideal'    (default) -> continuous steering (historical, no-op)
+    %   'codebook'           -> 3GPP TS 38.214 Sec. 5.2.2.2.1 Type I
+    %                           single-panel oversampled-DFT (PMI) beams
+    [opts.beamSelection, params.beamCodebook] = resolveBeamCodebook(opts);
 
     % ---- resolve opts with defaults ----------------------------------
     if ~isfield(opts, 'maxEirpPerSector_dBm') || isempty(opts.maxEirpPerSector_dBm)
@@ -420,6 +455,8 @@ function out = runR23AasEirpCdfGrid(varargin)
     metadata.seed                  = opts.seed;
     metadata.randomSeed            = opts.seed;
     metadata.outputFrame           = opts.outputFrame;
+    metadata.beamSelection         = opts.beamSelection;
+    metadata.beamCodebook          = params.beamCodebook;
     metadata.computePointingHeatmap = computePointing;
     metadata.pointingSummaryStatistic = nestedParams.sim.pointingSummaryStatistic;
     metadata.sourceDefault         = nestedParams.metadata.sourceDefault;
@@ -805,6 +842,66 @@ function validateNumMc(N)
             N == floor(N))
         error('runR23AasEirpCdfGrid:badNumMc', ...
             'numMc / numSnapshots must be a positive integer.');
+    end
+end
+
+function [mode, cb] = resolveBeamCodebook(opts)
+%RESOLVEBEAMCODEBOOK Read + validate opts.beamSelection / codebookOversample.
+%   Default 'ideal' (continuous steering; the byte-identical historical
+%   path). Allowed (case-insensitive): 'ideal', 'codebook'. 'codebook'
+%   selects the 3GPP TS 38.214 v19.2.0 Sec. 5.2.2.2.1 Type I single-panel
+%   oversampled-DFT (PMI) beam grid, applied to the panel-frame steering
+%   inside imtAasArrayFactor. opts.codebookOversample is a positive
+%   integer scalar or an [O_H O_V] pair; default [4 4] (TS 38.214 Table
+%   5.2.2.2.1-2 default oversampling O1 = O2 = 4).
+%   Errors:
+%       runR23AasEirpCdfGrid:invalidBeamSelection
+%       runR23AasEirpCdfGrid:invalidCodebookOversample
+    mode = 'ideal';
+    if isstruct(opts) && isfield(opts, 'beamSelection') && ...
+            ~isempty(opts.beamSelection)
+        mode = opts.beamSelection;
+    end
+    if isstring(mode) && isscalar(mode)
+        mode = char(mode);
+    end
+    if ~ischar(mode)
+        error('runR23AasEirpCdfGrid:invalidBeamSelection', ...
+            'opts.beamSelection must be a char/string scalar.');
+    end
+    mode = lower(mode);
+    switch mode
+        case {'ideal', 'codebook'}
+            % ok
+        otherwise
+            error('runR23AasEirpCdfGrid:invalidBeamSelection', ...
+                ['opts.beamSelection must be ''ideal'' or ''codebook'' ', ...
+                 '(got ''%s'').'], mode);
+    end
+
+    os = [4 4];
+    if isstruct(opts) && isfield(opts, 'codebookOversample') && ...
+            ~isempty(opts.codebookOversample)
+        os = opts.codebookOversample;
+    end
+    if ~(isnumeric(os) && isreal(os) && all(isfinite(os(:))) && ...
+            any(numel(os) == [1 2]) && all(os(:) >= 1) && ...
+            all(os(:) == floor(os(:))))
+        error('runR23AasEirpCdfGrid:invalidCodebookOversample', ...
+            ['opts.codebookOversample must be a positive integer scalar ', ...
+             'or an [O_H O_V] pair of positive integers.']);
+    end
+    os = double(os(:).');
+    if isscalar(os)
+        os = [os, os];
+    end
+
+    if strcmp(mode, 'ideal')
+        cb = struct('enable', false);
+    else
+        cb = struct('enable', true, ...
+                    'oversampleH', os(1), ...
+                    'oversampleV', os(2));
     end
 end
 
