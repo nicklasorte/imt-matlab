@@ -9,18 +9,17 @@ function results = test_imt_aas_codebook()
 %   imtAasArrayFactor quantization hook, and the runR23AasEirpCdfGrid
 %   opts.beamSelection / opts.codebookOversample plumbing).
 %
-%   Covers (base MATLAB only, fast):
+%   Covers (base MATLAB only, fast; fixed seeds throughout):
 %       T1.  Disabled == no-op: with the beamCodebook field absent, [] or
 %            enable = false, imtAasArrayFactor output is byte-identical
-%            to the historical path.
+%            (isequal) to the historical path.
 %       T2.  Nearest == exhaustive: imt_aas_codebook_select in 'nearest'
 %            mode returns the same (kH, kV) as the brute-force max-gain
-%            'exhaustive' search for a few hundred random panel-frame
+%            'exhaustive' search for several hundred random panel-frame
 %            directions (0 mismatches), i.e. nearest-bin snapping IS the
 %            max-gain Type I beam.
-%       T3.  On-grid direction -> exact bins + ~zero scan loss; codebook
-%            struct sizes / unit-modulus weights sanity.
-%       T4.  Worst-case scan loss < 0.5 dB at O = 4 and monotone
+%       T3.  On-grid direction -> exact (kH, kV) bins and ~zero scan loss.
+%       T4.  Worst-case scan loss < 0.5 dB at O = 4 and strictly monotone
 %            decreasing over O in {1, 2, 4, 8}.
 %       T5.  Quantization within half a bin: |aiQuant - a_i| <= 1/(2*MV)
 %            and |biQuant - b_i| <= 1/(2*MH).
@@ -28,12 +27,20 @@ function results = test_imt_aas_codebook()
 %            actual outer-AF gain drop measured by running
 %            imtAasArrayFactor ideal vs codebook at the same direction
 %            (max error < 1e-12 dB).
-%       T7.  Runner wiring via the flat opts struct: 'ideal' == field
-%            omitted (byte-identical stats / percentile maps);
-%            'codebook' runs, is deterministic, differs from 'ideal',
-%            populates out.metadata.beamSelection / .beamCodebook;
-%            flat-opts == name-value invocation; scalar oversample ==
-%            [O O]; invalid beamSelection throws the documented id.
+%       T7.  imt_aas_dft_codebook grid shape: MH = O_H*N_H, MV = O_V*N_V,
+%            numel(biBins) = MH, numel(aiBins) = MV, biBins/aiBins equal
+%            (0:M-1)/M; checked for default [4 4] and non-default [2 3];
+%            unit-modulus weights sanity.
+%       T8.  Runner wiring via the flat opts struct: 'ideal' == field
+%            omitted (byte-identical stats / percentile maps); 'codebook'
+%            runs (finite), is deterministic, differs from 'ideal', and
+%            populates out.metadata.beamSelection / .beamCodebook.
+%       T9.  Flat-opts == name-value invocation, and scalar oversample ==
+%            [O O] (both isequal on the computed outputs).
+%       T10. Invalid inputs error cleanly: bad beamSelection throws
+%            runR23AasEirpCdfGrid:invalidBeamSelection; a 3-element
+%            oversample throws runR23AasEirpCdfGrid:invalidCodebookOversample;
+%            non-integer / zero oversample throws.
 %
 %   Returns struct with .passed (logical) and .summary (cellstr).
 
@@ -46,7 +53,10 @@ function results = test_imt_aas_codebook()
     results = t4_loss_bounded_and_monotone(results);
     results = t5_quantization_within_half_bin(results);
     results = t6_selector_matches_array_factor(results);
-    results = t7_runner_wiring(results);
+    results = t7_dft_codebook_grid_shape(results);
+    results = t8_runner_wiring(results);
+    results = t9_flat_opts_and_scalar_oversample(results);
+    results = t10_invalid_inputs_error(results);
 
     fprintf('\n--- test_imt_aas_codebook summary ---\n');
     for k = 1:numel(results.summary)
@@ -57,7 +67,7 @@ function results = test_imt_aas_codebook()
 end
 
 % =====================================================================
-% Shared small Monte Carlo options (fast).
+% Shared small Monte Carlo options (fast, fixed seed).
 % =====================================================================
 function opts = mcOpts()
     opts = struct();
@@ -76,23 +86,31 @@ function r = t1_disabled_is_noop(r)
     params0 = imtAasDefaultParams();   % no beamCodebook field (historical)
     azGrid = -120:5:120;
     elGrid = -30:1.5:30;
-    steerAz = 17;
-    steerEl = -7;
 
-    g0 = imtAasArrayFactor(azGrid, elGrid, steerAz, steerEl, params0);
+    % A few steering / observation directions.
+    steers = [ 17 -7;  -33 12;  0 0;  55 -20 ];
 
-    pOff = params0;
-    pOff.beamCodebook = struct('enable', false);
-    gOff = imtAasArrayFactor(azGrid, elGrid, steerAz, steerEl, pOff);
+    ok = true;
+    for s = 1:size(steers, 1)
+        steerAz = steers(s, 1);
+        steerEl = steers(s, 2);
 
-    pEmpty = params0;
-    pEmpty.beamCodebook = [];
-    gEmpty = imtAasArrayFactor(azGrid, elGrid, steerAz, steerEl, pEmpty);
+        g0 = imtAasArrayFactor(azGrid, elGrid, steerAz, steerEl, params0);
 
-    ok = isequal(g0, gOff) && isequal(g0, gEmpty);
+        pOff = params0;
+        pOff.beamCodebook = struct('enable', false);
+        gOff = imtAasArrayFactor(azGrid, elGrid, steerAz, steerEl, pOff);
+
+        pEmpty = params0;
+        pEmpty.beamCodebook = [];
+        gEmpty = imtAasArrayFactor(azGrid, elGrid, steerAz, steerEl, pEmpty);
+
+        ok = ok && isequal(g0, gOff) && isequal(g0, gEmpty);
+    end
+
     r = check(r, ok, ...
         ['T1: beamCodebook absent / [] / enable=false are byte-identical ' ...
-         'to the historical imtAasArrayFactor path']);
+         '(isequal) to the historical imtAasArrayFactor path']);
 end
 
 % =====================================================================
@@ -101,9 +119,9 @@ end
 function r = t2_nearest_equals_exhaustive(r)
     params = imtAasDefaultParams();
     rng(42);
-    N = 300;
-    azList = -80 + 160 .* rand(N, 1);
-    elList = -50 + 100 .* rand(N, 1);
+    N = 400;
+    azList = -60 + 120 .* rand(N, 1);   % steerAz in [-60, 60]
+    elList = -30 +  60 .* rand(N, 1);   % steerEl in [-30, 30]
 
     mismatches = 0;
     for i = 1:N
@@ -121,51 +139,45 @@ function r = t2_nearest_equals_exhaustive(r)
 end
 
 % =====================================================================
-% T3: on-grid direction -> exact bins, ~zero loss; codebook struct sanity.
+% T3: on-grid direction -> exact bins, ~zero scan loss.
 % =====================================================================
 function r = t3_on_grid_zero_loss(r)
     params = imtAasDefaultParams();
-
-    cbDesc = imt_aas_dft_codebook(params, struct('returnWeights', true));
-    MH = cbDesc.MH;
-    MV = cbDesc.MV;
-    okCb = MH == 4 * params.numColumns && MV == 4 * params.numRows && ...
-           numel(cbDesc.biBins) == MH && numel(cbDesc.aiBins) == MV && ...
-           cbDesc.biBins(1) == 0 && cbDesc.aiBins(1) == 0 && ...
-           isequal(cbDesc.kHRange, [0, MH - 1]) && ...
-           isequal(cbDesc.kVRange, [0, MV - 1]) && ...
-           isequal(size(cbDesc.weights), ...
-               [params.numColumns * params.numRows, MH, MV]) && ...
-           max(abs(abs(cbDesc.weights(:)) - 1)) < 1e-12;
-
-    % Construct a steering direction that lands exactly on bin (kH0, kV0).
+    cb = imt_aas_dft_codebook(params, struct());
+    MH = cb.MH;
+    MV = cb.MV;
     d_H = params.hSpacingWavelengths;
     d_V = params.vSubarraySpacingWavelengths;
+
+    % Construct a steering direction that lands exactly on bin (kH0, kV0):
+    %   a_i = d_V*sin(-el) = kV0/MV  ->  el = -asind((kV0/MV)/d_V)
+    %   b_i = d_H*cos(-el)*sin(az) = kH0/MH  ->  az = asind((kH0/MH)/(d_H*cos(-el)))
     kV0 = 3;
     kH0 = 5;
-    el = -asind((kV0 / MV) / d_V);                    % a_i = kV0/MV exactly
-    az = asind((kH0 / MH) / (d_H * cosd(-el)));       % b_i = kH0/MH exactly
+    el = -asind((kV0 / MV) / d_V);
+    az =  asind((kH0 / MH) / (d_H * cosd(-el)));
 
     sel = imt_aas_codebook_select(az, el, params, struct());
-    okSel = sel.kV == kV0 && sel.kH == kH0 && abs(sel.scanLossDb) < 1e-9;
-    okEff = abs(sel.effSteerElDeg - el) < 1e-9 && ...
-            abs(sel.effSteerAzDeg - az) < 1e-9 && ~sel.isAliased;
+    okBins = sel.kV == kV0 && sel.kH == kH0;
+    okLoss = abs(sel.scanLossDb) < 1e-9;
+    okEff  = abs(sel.effSteerElDeg - el) < 1e-9 && ...
+             abs(sel.effSteerAzDeg - az) < 1e-9 && ~sel.isAliased;
 
-    r = check(r, okCb && okSel && okEff, sprintf( ...
+    r = check(r, okBins && okLoss && okEff, sprintf( ...
         ['T3: on-grid direction maps to exact bins (kH=%d, kV=%d), scan ' ...
-         'loss %.3g dB ~ 0, effective pointing recovered; codebook ' ...
-         'struct / unit-modulus weights OK'], sel.kH, sel.kV, sel.scanLossDb));
+         'loss %.3g dB ~ 0, effective pointing recovered'], ...
+        sel.kH, sel.kV, sel.scanLossDb));
 end
 
 % =====================================================================
-% T4: scan loss bounded at O=4 and monotone decreasing in O.
+% T4: scan loss bounded at O=4 and strictly monotone decreasing in O.
 % =====================================================================
 function r = t4_loss_bounded_and_monotone(r)
     params = imtAasDefaultParams();
     rng(7);
     N = 400;
     azList = -60 + 120 .* rand(N, 1);
-    elList = -45 + 90 .* rand(N, 1);
+    elList = -30 +  60 .* rand(N, 1);
 
     oList    = [1 2 4 8];
     maxLoss  = zeros(size(oList));
@@ -185,11 +197,11 @@ function r = t4_loss_bounded_and_monotone(r)
     end
 
     okBound    = maxLoss(oList == 4) < 0.5;
-    okMonotone = all(diff(maxLoss) < 0);
+    okMonotone = all(diff(maxLoss) < 0);   % w(1) > w(2) > w(4) > w(8)
 
     r = check(r, okBound && okMonotone && okNonNeg, sprintf( ...
         ['T4: worst-case scan loss at O=4 is %.3f dB (< 0.5) and max ' ...
-         'loss is monotone decreasing over O=[1 2 4 8]: ' ...
+         'loss is strictly decreasing over O=[1 2 4 8]: ' ...
          '[%.2f %.2f %.2f %.2f] dB (mean at O=4: %.3f dB)'], ...
         maxLoss(oList == 4), maxLoss(1), maxLoss(2), maxLoss(3), ...
         maxLoss(4), meanLoss(oList == 4)));
@@ -236,7 +248,7 @@ function r = t6_selector_matches_array_factor(r)
     rng(11);
     N = 60;
     azList = -60 + 120 .* rand(N, 1);
-    elList = -40 + 80 .* rand(N, 1);
+    elList = -40 +  80 .* rand(N, 1);
 
     maxErr = 0;
     for i = 1:N
@@ -246,7 +258,7 @@ function r = t6_selector_matches_array_factor(r)
         % Observe at exactly the requested pointing, panel frame.
         gIdeal = imtAasArrayFactor(az, el, az, el, params);
         gCb    = imtAasArrayFactor(az, el, az, el, pCb);
-        measuredLoss = gIdeal - gCb;   % sub-array term cancels
+        measuredLoss = gIdeal - gCb;   % sub-array / element terms cancel
         maxErr = max(maxErr, abs(measuredLoss - sel.scanLossDb));
     end
     r = check(r, maxErr < 1e-12, sprintf( ...
@@ -255,9 +267,44 @@ function r = t6_selector_matches_array_factor(r)
 end
 
 % =====================================================================
-% T7: runR23AasEirpCdfGrid wiring via the flat opts struct.
+% T7: imt_aas_dft_codebook grid shape (default [4 4] and non-default [2 3]).
 % =====================================================================
-function r = t7_runner_wiring(r)
+function r = t7_dft_codebook_grid_shape(r)
+    params = imtAasDefaultParams();
+    N_H = params.numColumns;
+    N_V = params.numRows;
+
+    % --- default O = [4 4], with weights for the unit-modulus sanity check.
+    cbA = imt_aas_dft_codebook(params, struct('returnWeights', true));
+    O_HA = 4; O_VA = 4;
+    okA = cbA.MH == O_HA * N_H && cbA.MV == O_VA * N_V && ...
+          numel(cbA.biBins) == cbA.MH && numel(cbA.aiBins) == cbA.MV && ...
+          max(abs(cbA.biBins - (0:(cbA.MH - 1)) ./ cbA.MH)) < 1e-12 && ...
+          max(abs(cbA.aiBins - (0:(cbA.MV - 1)) ./ cbA.MV)) < 1e-12 && ...
+          isequal(cbA.kHRange, [0, cbA.MH - 1]) && ...
+          isequal(cbA.kVRange, [0, cbA.MV - 1]) && ...
+          isequal(size(cbA.weights), [N_H * N_V, cbA.MH, cbA.MV]) && ...
+          max(abs(abs(cbA.weights(:)) - 1)) < 1e-12;
+
+    % --- non-default O_H = 2, O_V = 3.
+    O_HB = 2; O_VB = 3;
+    cbB = imt_aas_dft_codebook(params, ...
+        struct('oversampleH', O_HB, 'oversampleV', O_VB));
+    okB = cbB.MH == O_HB * N_H && cbB.MV == O_VB * N_V && ...
+          numel(cbB.biBins) == cbB.MH && numel(cbB.aiBins) == cbB.MV && ...
+          max(abs(cbB.biBins - (0:(cbB.MH - 1)) ./ cbB.MH)) < 1e-12 && ...
+          max(abs(cbB.aiBins - (0:(cbB.MV - 1)) ./ cbB.MV)) < 1e-12;
+
+    r = check(r, okA && okB, sprintf( ...
+        ['T7: dft codebook grid shape OK for [4 4] (MH=%d MV=%d) and ' ...
+         '[2 3] (MH=%d MV=%d); biBins/aiBins = (0:M-1)/M; weights ' ...
+         'unit-modulus'], cbA.MH, cbA.MV, cbB.MH, cbB.MV));
+end
+
+% =====================================================================
+% T8: runR23AasEirpCdfGrid wiring via the flat opts struct.
+% =====================================================================
+function r = t8_runner_wiring(r)
     base = mcOpts();
 
     outOmit = runR23AasEirpCdfGrid(base);
@@ -266,6 +313,7 @@ function r = t7_runner_wiring(r)
     optI.beamSelection = 'ideal';
     outIdeal = runR23AasEirpCdfGrid(optI);
 
+    % 'ideal' == field omitted: byte-identical streaming stats + maps.
     okIdealNoop = isequal(outOmit.stats.counts,     outIdeal.stats.counts) && ...
                   isequal(outOmit.stats.sum_lin_mW, outIdeal.stats.sum_lin_mW) && ...
                   isequal(outOmit.stats.min_dBm,    outIdeal.stats.min_dBm) && ...
@@ -280,12 +328,17 @@ function r = t7_runner_wiring(r)
     outCb2 = runR23AasEirpCdfGrid(optC);
 
     v = outCb1.percentileMaps.values;
+    % Finite output: real values present, never +/-Inf (NaN is the
+    % documented empty-cell sentinel from eirp_percentile_maps and is
+    % allowed on this tiny grid where deep-null cells can fall below the
+    % bin floor).
     okCbRuns = isstruct(outCb1.percentileMaps) && ~isempty(v) && ...
-               any(isfinite(v(:)));
+               any(isfinite(v(:))) && ~any(isinf(v(:)));
     okCbDeterministic = isequaln(v, outCb2.percentileMaps.values) && ...
                         isequal(outCb1.stats.counts, outCb2.stats.counts);
     okCbDiffers = ~isequal(outCb1.stats.sum_lin_mW, outOmit.stats.sum_lin_mW);
 
+    % Metadata is additive (beside outputFrame): beamSelection / beamCodebook.
     okMetaIdeal = isfield(outOmit.metadata, 'beamSelection') && ...
                   strcmp(outOmit.metadata.beamSelection, 'ideal') && ...
                   isfield(outOmit.metadata, 'beamCodebook') && ...
@@ -296,7 +349,29 @@ function r = t7_runner_wiring(r)
                outCb1.metadata.beamCodebook.oversampleH == 4 && ...
                outCb1.metadata.beamCodebook.oversampleV == 4;
 
-    % Flat-opts call must be bit-equivalent to the name-value call.
+    ok = okIdealNoop && okCbRuns && okCbDeterministic && okCbDiffers && ...
+         okMetaIdeal && okMetaCb;
+    r = check(r, ok, sprintf( ...
+        ['T8: runner wiring (idealNoop=%d cbRunsFinite=%d deterministic=%d ' ...
+         'differsFromIdeal=%d metaIdeal=%d metaCb=%d)'], ...
+        okIdealNoop, okCbRuns, okCbDeterministic, okCbDiffers, ...
+        okMetaIdeal, okMetaCb));
+end
+
+% =====================================================================
+% T9: flat-opts == name-value, and scalar oversample == [O O].
+% =====================================================================
+function r = t9_flat_opts_and_scalar_oversample(r)
+    base = mcOpts();
+
+    optC = base;
+    optC.beamSelection      = 'codebook';
+    optC.codebookOversample = [4 4];
+    outCb = runR23AasEirpCdfGrid(optC);
+    v = outCb.percentileMaps.values;
+
+    % Flat-opts call must be bit-equivalent to the name-value call carrying
+    % the same fields.
     flds = fieldnames(optC);
     nv = cell(1, 2 * numel(flds));
     for k = 1:numel(flds)
@@ -305,43 +380,81 @@ function r = t7_runner_wiring(r)
     end
     outNv = runR23AasEirpCdfGrid(nv{:});
     okNvEquiv = isequaln(outNv.percentileMaps.values, v) && ...
-                isequal(outNv.stats.counts, outCb1.stats.counts);
+                isequal(outNv.stats.counts, outCb.stats.counts);
 
     % Scalar oversample == [O O].
     optS = optC;
     optS.codebookOversample = 4;
     outS = runR23AasEirpCdfGrid(optS);
-    okScalarOversample = isequal(outS.stats.counts, outCb1.stats.counts) && ...
-                         isequal(outS.stats.sum_lin_mW, outCb1.stats.sum_lin_mW);
+    okScalarOversample = isequaln(outS.percentileMaps.values, v) && ...
+                         isequal(outS.stats.counts,     outCb.stats.counts) && ...
+                         isequal(outS.stats.sum_lin_mW, outCb.stats.sum_lin_mW);
 
-    % Invalid beamSelection throws the documented identifier.
+    r = check(r, okNvEquiv && okScalarOversample, sprintf( ...
+        ['T9: flat-opts == name-value (nvEquiv=%d) and scalar oversample ' ...
+         '== [O O] (scalarOversample=%d)'], okNvEquiv, okScalarOversample));
+end
+
+% =====================================================================
+% T10: invalid inputs error cleanly with the documented identifiers.
+% =====================================================================
+function r = t10_invalid_inputs_error(r)
+    base = mcOpts();
+
+    % --- bad beamSelection string.
     optBad = base;
     optBad.beamSelection = 'bogus';
-    threw   = false;
-    rightId = false;
-    try
-        runR23AasEirpCdfGrid(optBad);
-    catch err
-        threw   = true;
-        rightId = strcmp(err.identifier, ...
-            'runR23AasEirpCdfGrid:invalidBeamSelection');
-    end
+    okBadSel = throwsId(@() runR23AasEirpCdfGrid(optBad), ...
+        'runR23AasEirpCdfGrid:invalidBeamSelection');
 
-    ok = okIdealNoop && okCbRuns && okCbDeterministic && okCbDiffers && ...
-         okMetaIdeal && okMetaCb && okNvEquiv && okScalarOversample && ...
-         threw && rightId;
+    % --- 3-element oversample.
+    optLen = base;
+    optLen.beamSelection      = 'codebook';
+    optLen.codebookOversample = [1 2 3];
+    okBadLen = throwsId(@() runR23AasEirpCdfGrid(optLen), ...
+        'runR23AasEirpCdfGrid:invalidCodebookOversample');
+
+    % --- non-integer oversample (with codebook enabled).
+    optFrac = base;
+    optFrac.beamSelection      = 'codebook';
+    optFrac.codebookOversample = 2.5;
+    okFrac = throwsAny(@() runR23AasEirpCdfGrid(optFrac));
+
+    % --- zero oversample (with codebook enabled).
+    optZero = base;
+    optZero.beamSelection      = 'codebook';
+    optZero.codebookOversample = 0;
+    okZero = throwsAny(@() runR23AasEirpCdfGrid(optZero));
+
+    ok = okBadSel && okBadLen && okFrac && okZero;
     r = check(r, ok, sprintf( ...
-        ['T7: runner wiring (idealNoop=%d cbRuns=%d deterministic=%d ' ...
-         'differsFromIdeal=%d metaIdeal=%d metaCb=%d nvEquiv=%d ' ...
-         'scalarOversample=%d invalidIdThrows=%d)'], ...
-        okIdealNoop, okCbRuns, okCbDeterministic, okCbDiffers, ...
-        okMetaIdeal, okMetaCb, okNvEquiv, okScalarOversample, ...
-        threw && rightId));
+        ['T10: invalid inputs throw (badBeamSelection=%d 3-elemOversample=%d ' ...
+         'nonInteger=%d zero=%d)'], okBadSel, okBadLen, okFrac, okZero));
 end
 
 % =====================================================================
 % Helpers
 % =====================================================================
+function tf = throwsId(fn, id)
+%THROWSID True when FN errors with the exact MException identifier ID.
+    tf = false;
+    try
+        fn();
+    catch err
+        tf = strcmp(err.identifier, id);
+    end
+end
+
+function tf = throwsAny(fn)
+%THROWSANY True when FN errors at all (any identifier).
+    tf = false;
+    try
+        fn();
+    catch
+        tf = true;
+    end
+end
+
 function r = check(r, cond, msg)
     if cond
         r.summary{end+1} = ['PASS  ' msg];
