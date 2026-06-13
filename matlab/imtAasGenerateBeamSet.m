@@ -26,6 +26,14 @@ function beams = imtAasGenerateBeamSet(N, sector, opts)
 %                               raw raw* fields are kept and steerAzDeg /
 %                               steerElDeg / wasAzClipped / wasElClipped
 %                               are NOT added.
+%                 .clampElevation logical (default true). Threaded to
+%                               imtAasApplyBeamLimits: when false the
+%                               elevation gate is disabled ([-Inf, Inf])
+%                               while azimuth clamping is unchanged. Only
+%                               relevant when applyLimits == true; when
+%                               applyLimits == false the clamp function is
+%                               not called at all, so clampElevation is
+%                               moot in that path.
 %
 %   Output struct fields:
 %       N
@@ -60,6 +68,12 @@ function beams = imtAasGenerateBeamSet(N, sector, opts)
         applyLimits = true;
     end
 
+    if isfield(opts, 'clampElevation') && ~isempty(opts.clampElevation)
+        clampElevation = logical(opts.clampElevation);
+    else
+        clampElevation = true;
+    end
+
     sampleOpts = struct();
     if isfield(opts, 'seed') && ~isempty(opts.seed)
         sampleOpts.seed = opts.seed;
@@ -78,7 +92,8 @@ function beams = imtAasGenerateBeamSet(N, sector, opts)
     beam = imtAasUeToBeamAngles(ue, sector);
 
     if applyLimits
-        beam = imtAasApplyBeamLimits(beam, sector);
+        beam = imtAasApplyBeamLimits(beam, sector, ...
+            struct('clampElevation', clampElevation));
     end
 
     beams = struct();

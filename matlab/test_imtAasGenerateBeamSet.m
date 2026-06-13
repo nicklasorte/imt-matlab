@@ -12,6 +12,9 @@ function results = test_imtAasGenerateBeamSet()
 %          and steer*/wasClipped fields are absent.
 %       5. Explicit opts.azRelDeg / opts.r_m bypass random sampling.
 %       6. Invalid N (e.g. N=0) propagates as imtAasSampleUePositions:invalidN.
+%       7. opts.clampElevation threads to imtAasApplyBeamLimits: the azimuth
+%          draws are unaffected, clampElevation=false lets elevation pass
+%          below -10 deg, and clampElevation=true holds it within [-10, 0].
 %
 %   Returns:
 %       struct('passed', logical, 'skipped', false, 'reason', '')
@@ -91,6 +94,30 @@ function results = test_imtAasGenerateBeamSet()
     end
     assert(threw, 'N=0 must error');
     fprintf('  [OK] invalid N (=0) propagates invalidN\n');
+
+    % ===== 7. clampElevation threads through: az unaffected, el gate toggled =====
+    % The radial ranges r_m are pinned so the no-clamp "points lower"
+    % assertion is GUARANTEED (a random radial draw only lands close enough
+    % to clear the -10 deg gate ~5% of the time per UE). Azimuth is still
+    % drawn from the seeded stream, so the azimuth-identity assertion stays a
+    % genuine same-draws comparison between the two clampElevation modes.
+    S  = 7;
+    Nb = 20;
+    % macroUrban dz = ueHeight - bsHeight = 1.5 - 18 = -16.5 m, so raw
+    % elevation = atan2d(-16.5, r): r < ~93.6 m -> raw el < -10 deg, larger r
+    % stays inside [-10, 0]. linspace(40, 390) spans both sides of the gate.
+    rRanges = linspace(40, 390, Nb).';
+    bOn  = imtAasGenerateBeamSet(Nb, sector, struct( ...
+        'seed', S, 'clampElevation', true,  'r_m', rRanges));
+    bOff = imtAasGenerateBeamSet(Nb, sector, struct( ...
+        'seed', S, 'clampElevation', false, 'r_m', rRanges));
+    assert(isequal(bOn.steerAzDeg, bOff.steerAzDeg), ...
+        'azimuth must be unaffected by clampElevation (same seeded draws)');
+    assert(any(bOff.steerElDeg < -10 - 1e-9), ...
+        'clampElevation=false must let beams point below -10 deg');
+    assert(all(bOn.steerElDeg >= -10 - 1e-9 & bOn.steerElDeg <= 0 + 1e-9), ...
+        'clampElevation=true must hold elevation within [-10, 0]');
+    fprintf('  [OK] clampElevation: az unaffected, el gate toggles\n');
 
     results.passed = true;
     fprintf('--- test_imtAasGenerateBeamSet PASSED ---\n');

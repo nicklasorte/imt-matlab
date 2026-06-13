@@ -14,6 +14,11 @@ function results = test_imtAasApplyBeamLimits()
 %       6. Sector pass-through via beam.sector (when no sector arg).
 %       7. Missing beam input raises imtAasApplyBeamLimits:missingBeam.
 %       8. Missing rawSteer fields raises imtAasApplyBeamLimits:missingFields.
+%       9. clampElevation=false disables the elevation gate (steerElDeg ==
+%          rawEl, wasElClipped all-false, elLimitsDeg == [-Inf Inf]) while
+%          azimuth clamping is UNAFFECTED.
+%      10. Default 2-arg call == clampElevation=true: elevation is clamped
+%          to [-10, 0] identically.
 %
 %   Returns:
 %       struct('passed', logical, 'skipped', false, 'reason', '')
@@ -111,6 +116,39 @@ function results = test_imtAasApplyBeamLimits()
     end
     assert(threw, 'missing rawSteer fields must error');
     fprintf('  [OK] missing rawSteer fields raise missingFields\n');
+
+    % ===== 9. clampElevation=false: az still clamped, el untouched =====
+    beamNoEl = struct( ...
+        'rawSteerAzDeg', [-90; 75; 30], ...
+        'rawSteerElDeg', [-25; 5; -3], ...
+        'sector', sector);
+    bNoEl = imtAasApplyBeamLimits(beamNoEl, sector, ...
+        struct('clampElevation', false));
+    assert(isequal(bNoEl.steerAzDeg, [-60; 60; 30]), ...
+        'az must STILL clamp to [-60, 60] when clampElevation=false');
+    assert(isequal(bNoEl.steerElDeg, beamNoEl.rawSteerElDeg), ...
+        'el must pass through unclamped when clampElevation=false');
+    assert(~any(bNoEl.wasElClipped), ...
+        'wasElClipped must be all-false when clampElevation=false');
+    assert(isequal(bNoEl.elLimitsDeg, [-Inf Inf]), ...
+        'elLimitsDeg must be [-Inf Inf] (no-clamp audit signal)');
+    assert(bNoEl.wasAzClipped(1) && bNoEl.wasAzClipped(2) && ...
+           ~bNoEl.wasAzClipped(3), ...
+        'az-clip flags must be unaffected by clampElevation');
+    fprintf('  [OK] clampElevation=false: az clamped, el untouched\n');
+
+    % ===== 10. default 2-arg == clampElevation=true: el clamped to [-10,0] =====
+    bDefault = imtAasApplyBeamLimits(beamNoEl, sector);
+    bClampOn = imtAasApplyBeamLimits(beamNoEl, sector, ...
+        struct('clampElevation', true));
+    assert(isequal(bDefault.steerElDeg, bClampOn.steerElDeg), ...
+        'default 2-arg call must match clampElevation=true');
+    assert(isequal(bDefault.steerElDeg, [-10; 0; -3]), ...
+        'el must clamp to [-10, 0] when clampElevation=true');
+    assert(isequal(bDefault.elLimitsDeg, sector.elLimitsDeg) && ...
+           isequal(bClampOn.elLimitsDeg, sector.elLimitsDeg), ...
+        'elLimitsDeg must echo nominal [-10, 0] when clamping');
+    fprintf('  [OK] default 2-arg == clampElevation=true (el clamped)\n');
 
     results.passed = true;
     fprintf('--- test_imtAasApplyBeamLimits PASSED ---\n');

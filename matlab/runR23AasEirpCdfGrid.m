@@ -29,7 +29,7 @@ function out = runR23AasEirpCdfGrid(varargin)
 %        opts.outputCsvPath, opts.outputMetadataPath,
 %        opts.numUesPerSector, opts.maxEirpPerSector_dBm,
 %        opts.environment, opts.computePointingHeatmap,
-%        opts.beamSelection, opts.codebookOversample.
+%        opts.clampElevation, opts.beamSelection, opts.codebookOversample.
 %      The flat OPTS struct also accepts the same AAS geometry fields as
 %      the name-value form:
 %        opts.aasGeometryPreset,
@@ -221,6 +221,7 @@ function out = runR23AasEirpCdfGrid(varargin)
                                         nestedParams.sim.splitSectorPower);
     opts.computePointingHeatmap = getOpt(opts, 'computePointingHeatmap', ...
                                         nestedParams.sim.computePointingHeatmap);
+    opts.clampElevation      = getOpt(opts, 'clampElevation',      true);
     opts.progressEvery       = getOpt(opts, 'progressEvery',       0);
     opts.mcChunkSize         = getOpt(opts, 'mcChunkSize',         ...
                                         min(double(opts.numMc), 500));
@@ -319,7 +320,8 @@ function out = runR23AasEirpCdfGrid(varargin)
     [hWaitbar_ml_mc_chunks,hWaitbarMsgQueue_ml_mc_chunks]= ParForWaitbarCreateMH_time('Number of MC: ',numMc);    %%%%%%% Create ParFor Waitbar, this one covers points and chunks
     for it = 1:numMc
         it
-        beams = imtAasGenerateBeamSet(numBeams, sector);
+        beamGenOpts = struct('clampElevation', logical(opts.clampElevation));
+        beams = imtAasGenerateBeamSet(numBeams, sector, beamGenOpts);
 
         sectorOut = imtAasSectorEirpGridFromBeams( ...
             azGrid, elGrid, beams, params, sectorOpts);
@@ -458,6 +460,8 @@ function out = runR23AasEirpCdfGrid(varargin)
     metadata.beamSelection         = opts.beamSelection;
     metadata.beamCodebook          = params.beamCodebook;
     metadata.computePointingHeatmap = computePointing;
+    metadata.clampElevation        = logical(opts.clampElevation);
+    metadata.elevationLimitsDeg    = sector.elLimitsDeg;   % effective nominal gate [-10 0]
     metadata.pointingSummaryStatistic = nestedParams.sim.pointingSummaryStatistic;
     metadata.sourceDefault         = nestedParams.metadata.sourceDefault;
     % Propagate scenario preset metadata when present (set by
