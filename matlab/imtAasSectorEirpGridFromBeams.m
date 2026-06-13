@@ -38,6 +38,15 @@ function out = imtAasSectorEirpGridFromBeams(azGridDeg, elGridDeg, beams, params
 %                       aggregationMode         default 'sum_mW'
 %                       returnPerBeam           default true
 %                       normalizeEachBeamToPeak default true
+%                       computeGain             default false. When true,
+%                                               the ABSOLUTE composite gain
+%                                               in dBi is captured per beam
+%                                               and the served-beam gain
+%                                               envelope is added to the
+%                                               output (see below). When
+%                                               false the EIRP path is
+%                                               byte-identical to the
+%                                               historical behaviour.
 %
 %   Output struct fields:
 %       azGridDeg                  vector passthrough [deg]
@@ -59,6 +68,18 @@ function out = imtAasSectorEirpGridFromBeams(azGridDeg, elGridDeg, beams, params
 %       peakEnvelopeEirpDbm        max(maxEnvelopeEirpDbm(:))
 %       eirpAggregateDbwPerHz      Naz x Nel [dBW / Hz]
 %       eirpEnvelopeDbwPerHz       Naz x Nel [dBW / Hz]
+%
+%   When OPTS.COMPUTEGAIN == true the following ABSOLUTE composite gain
+%   outputs are also added (they are NOT present otherwise):
+%       maxEnvelopeGainDbi         Naz x Nel served-beam gain envelope
+%                                  [dBi]. The gain combine is the MAX over
+%                                  simultaneous beams (the realized served-
+%                                  beam gain per direction), NOT a linear-
+%                                  power sum: antenna gain does not power-
+%                                  sum across beams.
+%       peakEnvelopeGainDbi        max(maxEnvelopeGainDbi(:)) [dBi]
+%       perBeamGainDbi             Naz x Nel x numBeams [dBi] (only when
+%                                  opts.returnPerBeam == true)
 %
 %   Important - this function is antenna-face EIRP only:
 %     * NO TDD activity factor
@@ -178,6 +199,12 @@ function out = imtAasSectorEirpGridFromBeams(azGridDeg, elGridDeg, beams, params
         normalizeEachBeamToPeak = true;
     end
 
+    if isfield(opts, 'computeGain') && ~isempty(opts.computeGain)
+        computeGain = logical(opts.computeGain);
+    else
+        computeGain = false;
+    end
+
     % ---- per-beam peak EIRP (the power split) -------------------------
     if splitSectorPower
         perBeamPeakEirpDbm = sectorEirpDbm - 10 * log10(numBeams);
@@ -186,12 +213,19 @@ function out = imtAasSectorEirpGridFromBeams(azGridDeg, elGridDeg, beams, params
     end
 
     % ---- per-beam EIRP grids ------------------------------------------
+    % One pattern evaluation per beam in BOTH modes (no duplicate compute).
+    % The default (computeGain == false) branch is byte-identical to the
+    % historical single-output call, so the EIRP path is unchanged.
     perBeamEirpDbm = zeros(Naz, Nel, numBeams);
+    if computeGain, perBeamGainDbi = zeros(Naz, Nel, numBeams); end
     for i = 1:numBeams
-        perBeamEirpDbm(:, :, i) = imtAasEirpGrid( ...
-            azVec, elVec, ...
-            steerAz(i), steerEl(i), ...
-            perBeamPeakEirpDbm, params);
+        if computeGain
+            [perBeamEirpDbm(:, :, i), perBeamGainDbi(:, :, i)] = imtAasEirpGrid( ...
+                azVec, elVec, steerAz(i), steerEl(i), perBeamPeakEirpDbm, params);
+        else
+            perBeamEirpDbm(:, :, i) = imtAasEirpGrid( ...
+                azVec, elVec, steerAz(i), steerEl(i), perBeamPeakEirpDbm, params);
+        end
     end
 
     % ---- aggregation by linear-mW power summation ---------------------
@@ -225,4 +259,15 @@ function out = imtAasSectorEirpGridFromBeams(azGridDeg, elGridDeg, beams, params
     out.eirpEnvelopeDbwPerHz   = eirpEnvelopeDbwPerHz;
     out.aggregationMode        = aggregationMode;
     out.normalizeEachBeamToPeak = normalizeEachBeamToPeak;
+
+    % ---- optional ABSOLUTE composite gain envelope -------------------
+    % Gain combine = MAX over simultaneous beams (the realized served-beam
+    % gain per direction). Antenna gain does NOT power-sum across beams, so
+    % this is an envelope (max), not a linear-mW sum. Only added when
+    % requested; the default path adds no gain fields at all.
+    if computeGain
+        out.maxEnvelopeGainDbi  = max(perBeamGainDbi, [], 3);     % served-beam gain envelope [dBi]
+        out.peakEnvelopeGainDbi = max(out.maxEnvelopeGainDbi(:)); % [dBi]
+        if returnPerBeam, out.perBeamGainDbi = perBeamGainDbi; end % [dBi], Naz x Nel x numBeams
+    end
 end

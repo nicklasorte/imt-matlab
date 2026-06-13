@@ -1,10 +1,11 @@
-function eirpGridDbm = imtAasEirpGrid(azGridDeg, elGridDeg, ...
+function [eirpGridDbm, compositeGainDbi] = imtAasEirpGrid(azGridDeg, elGridDeg, ...
         steerAzDeg, steerElDeg, sectorEirpDbm, params)
 %IMTAASEIRPGRID Peak-normalized AAS sector EIRP distribution over az/el.
 %
 %   EIRPGRIDDBM = imtAasEirpGrid(AZGRIDDEG, ELGRIDDEG, ...
 %                                STEERAZDEG, STEERELDEG, ...
 %                                SECTOREIRPDBM, PARAMS)
+%   [EIRPGRIDDBM, COMPOSITEGAINDBI] = imtAasEirpGrid(...)
 %
 %   Returns the EIRP radiated from the face of one IMT AAS sector antenna
 %   in each direction of the (azGridDeg, elGridDeg) observation grid for an
@@ -32,6 +33,11 @@ function eirpGridDbm = imtAasEirpGrid(azGridDeg, elGridDeg, ...
 %   Output:
 %       eirpGridDbm            EIRP per direction [dBm / 100 MHz], shape
 %                              determined by imtAasNormalizeGrid.
+%       compositeGainDbi       (optional 2nd output) the ABSOLUTE composite
+%                              gain in dBi from imtAasCompositeGain, BEFORE
+%                              the peak subtraction. Same shape as
+%                              eirpGridDbm. Requesting it does not change
+%                              eirpGridDbm or any internal computation.
 %
 %   Angle conventions (sector frame):
 %       azimuth   in [-180, 180] deg, 0 = sector boresight
@@ -61,4 +67,9 @@ function eirpGridDbm = imtAasEirpGrid(azGridDeg, elGridDeg, ...
     end
 
     eirpGridDbm = sectorEirpDbm + compositeDbi - peakDbi;
+
+    % Optional 2nd output: the ABSOLUTE composite gain in dBi (the value
+    % already computed above, before the peak subtraction). Assigning it
+    % unconditionally is a no-op for single-output callers.
+    compositeGainDbi = compositeDbi;
 end

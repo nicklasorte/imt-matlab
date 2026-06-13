@@ -246,6 +246,54 @@ function results = test_imtAasSectorEirpGridFromBeams()
     end
     fprintf('  [OK] output has no path-loss / receiver / I/N fields\n');
 
+    % ===== 13. computeGain: served-beam gain envelope + exact identities ==
+    %   Gain combine is the MAX over simultaneous beams (envelope), not a
+    %   power sum. The per-beam gain<->EIRP identity and self-consistency
+    %   vs the imtAasCompositeGain primitive must hold to 1e-9.
+    beamsG = struct('steerAzDeg', [-30; 0; 30], ...
+                    'steerElDeg', [ -6; -9; -4]);
+    outG = imtAasSectorEirpGridFromBeams(azGridDeg, elGridDeg, beamsG, p, ...
+        struct('computeGain', true, 'returnPerBeam', true, ...
+               'splitSectorPower', true));
+
+    assert(isfield(outG, 'maxEnvelopeGainDbi'), ...
+        'computeGain=true must add maxEnvelopeGainDbi');
+    assert(isequal(size(outG.maxEnvelopeGainDbi), [Naz, Nel]), ...
+        'maxEnvelopeGainDbi size %s != [%d %d]', ...
+        mat2str(size(outG.maxEnvelopeGainDbi)), Naz, Nel);
+    assert(all(isfinite(outG.maxEnvelopeGainDbi(:))), ...
+        'maxEnvelopeGainDbi has non-finite values');
+    assert(isequal(outG.maxEnvelopeGainDbi, max(outG.perBeamGainDbi, [], 3)), ...
+        'envelope gain must equal max over beams of perBeamGainDbi');
+
+    for i = 1:outG.numBeams
+        % PER-BEAM exact gain<->EIRP identity (multi-beam):
+        %   compositeDbi_b - max(compositeDbi_b) == eirp_b - perBeamPeak
+        lhs = outG.perBeamGainDbi(:, :, i) ...
+            - max(outG.perBeamGainDbi(:, :, i), [], 'all');
+        rhs = outG.perBeamEirpDbm(:, :, i) - outG.perBeamPeakEirpDbm;
+        assert(max(abs(lhs - rhs), [], 'all') < 1e-9, ...
+            'per-beam gain<->EIRP identity violated for beam %d', i);
+
+        % SELF-CONSISTENCY vs the imtAasCompositeGain primitive.
+        gDirect = imtAasCompositeGain(azGridDeg, elGridDeg, ...
+            beamsG.steerAzDeg(i), beamsG.steerElDeg(i), p);
+        assert(max(abs(outG.perBeamGainDbi(:, :, i) - gDirect), [], 'all') < 1e-9, ...
+            'perBeamGainDbi != imtAasCompositeGain primitive for beam %d', i);
+    end
+    fprintf('  [OK] computeGain: envelope = max over beams; per-beam gain<->EIRP identity to 1e-9\n');
+
+    % ===== 14. back-compat: default (computeGain=false) adds no gain ======
+    outNoGain = imtAasSectorEirpGridFromBeams(azGridDeg, elGridDeg, beamsG, p, ...
+        struct('returnPerBeam', true, 'splitSectorPower', true));
+    assert(~isfield(outNoGain, 'maxEnvelopeGainDbi'), ...
+        'default path must NOT add maxEnvelopeGainDbi');
+    assert(~isfield(outNoGain, 'perBeamGainDbi'), ...
+        'default path must NOT add perBeamGainDbi');
+    assert(isequal(outG.aggregateEirpDbm, outNoGain.aggregateEirpDbm), ...
+        'EIRP path must be identical with and without computeGain');
+    fprintf('  [OK] default path adds no gain fields; EIRP path unchanged\n');
+
     results.passed = true;
     fprintf('--- test_imtAasSectorEirpGridFromBeams PASSED ---\n');
 end

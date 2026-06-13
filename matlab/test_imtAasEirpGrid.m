@@ -161,6 +161,25 @@ function results = test_imtAasEirpGrid()
     fprintf('  [OK] composite peak gain ~ %.2f dBi (expected ~%.2f dBi)\n', ...
         peakGainAtSteer, expectedPeak);
 
+    % ===== 8. optional 2nd output: absolute composite gain (dBi) =====
+    %   [eirp, gain] = imtAasEirpGrid(...) returns the ABSOLUTE composite
+    %   gain in dBi (before the peak subtraction) as the 2nd output, and
+    %   the 1st output must be peak-normalized to sectorEirpDbm exactly.
+    sectorEirpDbm = p.sectorEirpDbm;
+    [eirp2, gain] = imtAasEirpGrid(azGridDeg, elGridDeg, steerAz, steerEl, ...
+        sectorEirpDbm, p);
+    assert(isequal(size(gain), size(eirp2)), ...
+        'gain size %s != eirp size %s', ...
+        mat2str(size(gain)), mat2str(size(eirp2)));
+    assert(max(abs(eirp2 - (sectorEirpDbm + gain - max(gain(:)))), [], 'all') < 1e-9, ...
+        'EIRP must equal gain peak-normalized to sectorEirpDbm');
+    assert(all(isfinite(gain(:))), 'composite gain has non-finite values');
+    assert(abs(max(gain(:)) - max(gain, [], 'all')) < 1e-12);  % sanity
+    % The single-output form must be unaffected by requesting the 2nd output.
+    assert(isequal(eirp2, eirp), ...
+        '1st output changed when 2nd output was requested');
+    fprintf('  [OK] 2nd output is absolute composite gain (dBi); 1st output unchanged\n');
+
     results.passed = true;
     fprintf('--- test_imtAasEirpGrid PASSED ---\n');
 end
