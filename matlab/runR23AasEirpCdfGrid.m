@@ -29,7 +29,8 @@ function out = runR23AasEirpCdfGrid(varargin)
 %        opts.outputCsvPath, opts.outputMetadataPath,
 %        opts.numUesPerSector, opts.maxEirpPerSector_dBm,
 %        opts.environment, opts.computePointingHeatmap,
-%        opts.clampElevation, opts.beamSelection, opts.codebookOversample.
+%        opts.clampElevation, opts.beamSelection, opts.codebookOversample,
+%        opts.outputDomain, opts.gainBinEdgesDbi.
 %      The flat OPTS struct also accepts the same AAS geometry fields as
 %      the name-value form:
 %        opts.aasGeometryPreset,
@@ -91,6 +92,22 @@ function out = runR23AasEirpCdfGrid(varargin)
 %       construction, the max-gain == nearest-bin property, and the
 %       aliasing (grating lobe) caveat for the d_V = 2.1 lambda stack.
 %
+%   Output domain (non-breaking; default 'eirp'):
+%       opts.outputDomain ('eirp' | 'gain' | 'both', default 'eirp'):
+%           'eirp' -> EIRP CDF-grid only (historical behavior, byte-
+%                     identical default; gain is not computed).
+%           'gain' -> additionally compute the antenna GAIN heatmap, i.e.
+%                     the realized served-beam composite gain in dBi per
+%                     direction, combined as the MAX over simultaneous
+%                     beams (an envelope, NOT a power sum). Geometry-
+%                     agnostic: works unchanged for every aasGeometryPreset
+%                     because the geometry already rides params.
+%           'both' -> both of the above (EIRP is nearly free).
+%       opts.gainBinEdgesDbi: histogram bin edges for the gain accumulator
+%           [dBi], default -100:0.5:40. Surfaced via out.gainStats /
+%           out.gainPercentileMaps and out.metadata.outputDomain /
+%           .computeGain / .gainAggregation / .peakRealizedGainDbi.
+%
 %   Power semantics (R23 macro 7.125-8.4 GHz):
 %       maxEirpPerSector_dBm = 78.3   sector peak EIRP [dBm / 100 MHz]
 %       conductedPower_dBm   = 46.1   conducted BS power [dBm / 100 MHz]
@@ -111,6 +128,13 @@ function out = runR23AasEirpCdfGrid(varargin)
 %       .stats              streaming aggregator (counts, sum_lin_mW,
 %                           min_dBm, max_dBm, mean_dBm, ...).
 %       .percentileMaps     struct from eirp_percentile_maps.
+%       .gainStats          gain accumulator (same shape as .stats but in
+%                           dBi; the realized served-beam composite gain,
+%                           max over beams). Empty ([]) unless
+%                           opts.outputDomain is 'gain' or 'both'.
+%       .gainPercentileMaps gain percentile maps (.values in dBi). Always
+%                           present; .values is empty unless gain was
+%                           computed. See opts.outputDomain.
 %       .pointing           pointing-angle aggregator (when computed):
 %                             .azimuthDegGrid       Naz x Nel [deg]
 %                             .elevationDegGrid     Naz x Nel [deg]
@@ -221,6 +245,18 @@ function out = runR23AasEirpCdfGrid(varargin)
                                         nestedParams.sim.splitSectorPower);
     opts.computePointingHeatmap = getOpt(opts, 'computePointingHeatmap', ...
                                         nestedParams.sim.computePointingHeatmap);
+
+    % ---- output domain (non-breaking; default 'eirp') ---------------
+    % 'gain' and 'both' both compute EIRP + gain: EIRP is nearly free (the
+    % gain falls straight out of the same per-beam pattern eval) and the
+    % rest of the pipeline depends on it, so only 'eirp' (the default)
+    % skips the gain accumulator entirely. The gain heatmap is the
+    % realized served-beam composite gain in dBi (max over beams envelope).
+    opts.outputDomain    = getOpt(opts, 'outputDomain', 'eirp');   % 'eirp' | 'gain' | 'both'
+    opts.gainBinEdgesDbi = getOpt(opts, 'gainBinEdgesDbi', -100:0.5:40);
+    opts.outputDomain    = validateOutputDomain(opts.outputDomain);
+    computeGain = ismember(lower(char(opts.outputDomain)), {'gain', 'both'});
+
     opts.clampElevation      = getOpt(opts, 'clampElevation',      true);
     opts.progressEvery       = getOpt(opts, 'progressEvery',       0);
     opts.mcChunkSize         = getOpt(opts, 'mcChunkSize',         ...
@@ -293,6 +329,20 @@ function out = runR23AasEirpCdfGrid(varargin)
     stats.params             = params;
     stats.opts               = opts;
 
+    % ---- init parallel gain accumulator (only when requested) -------
+    % Reuses the generic update_eirp_histograms aggregator. Its field
+    % names say _dBm / _mW but the math is unit-agnostic; for gainStats
+    % those fields hold dBi values (the realized served-beam composite
+    % gain, max over beams). The .units / .aggregation tags document this.
+    if computeGain
+        gainEdges = double(opts.gainBinEdgesDbi(:).');
+        NbinGain  = numel(gainEdges) - 1;
+        gainStats = struct('azGrid',azGrid, 'elGrid',elGrid, 'binEdges',gainEdges, ...
+            'counts',zeros(Naz,Nel,NbinGain,'uint32'), 'sum_lin_mW',zeros(Naz,Nel), ...
+            'min_dBm',inf(Naz,Nel), 'max_dBm',-inf(Naz,Nel), 'numMc',0, ...
+            'units','dBi', 'aggregation','max_over_beams_envelope');
+    end
+
     % ---- init pointing aggregator -----------------------------------
     computePointing = logical(opts.computePointingHeatmap);
     if computePointing
@@ -311,7 +361,8 @@ function out = runR23AasEirpCdfGrid(varargin)
     sectorOpts = struct( ...
         'splitSectorPower', logical(opts.splitSectorPower), ...
         'returnPerBeam',    computePointing, ...
-        'sectorEirpDbm',    params.sectorEirpDbm);
+        'sectorEirpDbm',    params.sectorEirpDbm, ...
+        'computeGain',      computeGain);
 
     progressEvery = double(opts.progressEvery);
     numMc         = double(opts.numMc);
@@ -327,6 +378,12 @@ function out = runR23AasEirpCdfGrid(varargin)
             azGrid, elGrid, beams, params, sectorOpts);
 
         stats = update_eirp_histograms(stats, sectorOut.aggregateEirpDbm);
+
+        if computeGain
+            % Unit-agnostic accumulator over dBi values (max-over-beams
+            % served-beam gain envelope) rather than EIRP dBm.
+            gainStats = update_eirp_histograms(gainStats, sectorOut.maxEnvelopeGainDbi);
+        end
 
         if computePointing
             steerAz = double(beams.steerAzDeg(:));
@@ -399,6 +456,13 @@ function out = runR23AasEirpCdfGrid(varargin)
     pmaps = eirp_percentile_maps(stats, opts.percentiles);
     toc;
 
+    % ---- gain percentile maps (only when requested) -----------------
+    % Same generic percentile machinery; .values come out in dBi because
+    % gainStats was accumulated over the dBi gain envelope.
+    if computeGain
+        gainMaps = eirp_percentile_maps(gainStats, opts.percentiles);
+    end
+
     % ---- power-semantics self-check ---------------------------------
     % Continuously validate EIRP normalization to guard against future
     % power double-counting / aggregation / normalization regressions.
@@ -457,6 +521,16 @@ function out = runR23AasEirpCdfGrid(varargin)
     metadata.seed                  = opts.seed;
     metadata.randomSeed            = opts.seed;
     metadata.outputFrame           = opts.outputFrame;
+    % ---- output domain / gain heatmap (additive) -------------------
+    metadata.outputDomain          = lower(char(opts.outputDomain));
+    metadata.computeGain           = logical(computeGain);
+    metadata.gainAggregation       = 'max_over_beams_envelope';
+    metadata.gainBinEdgesDbi       = opts.gainBinEdgesDbi;     % (meaningful when computeGain)
+    if computeGain
+        metadata.peakRealizedGainDbi = max(gainMaps.values(:));
+    else
+        metadata.peakRealizedGainDbi = [];
+    end
     metadata.beamSelection         = opts.beamSelection;
     metadata.beamCodebook          = params.beamCodebook;
     metadata.computePointingHeatmap = computePointing;
@@ -542,6 +616,17 @@ function out = runR23AasEirpCdfGrid(varargin)
     out.percentileMaps = pmaps;
     out.pointing       = pointing;
     out.selfCheck      = selfCheck;
+    % ---- gain heatmap outputs (always present; empty when not computed)
+    % Mirrors the `pointing` disabled-placeholder pattern so the output
+    % shape is predictable regardless of opts.outputDomain.
+    if computeGain
+        out.gainStats          = gainStats;
+        out.gainPercentileMaps = gainMaps;          % .values in dBi
+    else
+        out.gainStats          = [];
+        out.gainPercentileMaps = struct('percentiles',opts.percentiles, ...
+            'azGrid',azGrid, 'elGrid',elGrid, 'values',[], 'binEdges',[], 'units','dBi');
+    end
     out.metadata       = metadata;
 
     % ---- optional CSV export ----------------------------------------
@@ -933,6 +1018,29 @@ function frame = resolveOutputFrame(opts)
             error('runR23AasEirpCdfGrid:invalidOutputFrame', ...
                 ['opts.outputFrame must be one of ''global'', ''sector'', ', ...
                  '''panel'' (got ''%s'').'], frame);
+    end
+end
+
+function domain = validateOutputDomain(domain)
+%VALIDATEOUTPUTDOMAIN Read + validate the optional opts.outputDomain field.
+%   Allowed (case-insensitive): 'eirp' (default), 'gain', 'both'. Returns
+%   the lowercased value. Errors with id
+%   'runR23AasEirpCdfGrid:invalidOutputDomain' on any other value.
+    if isstring(domain) && isscalar(domain)
+        domain = char(domain);
+    end
+    if ~ischar(domain)
+        error('runR23AasEirpCdfGrid:invalidOutputDomain', ...
+            'opts.outputDomain must be a char/string scalar.');
+    end
+    domain = lower(domain);
+    switch domain
+        case {'eirp', 'gain', 'both'}
+            % ok
+        otherwise
+            error('runR23AasEirpCdfGrid:invalidOutputDomain', ...
+                ['opts.outputDomain must be one of ''eirp'', ''gain'', ', ...
+                 '''both'' (got ''%s'').'], domain);
     end
 end
 
