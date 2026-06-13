@@ -115,6 +115,35 @@ explicit about exposing `EIRP(grid_point, snapshot)`. Defaults are kept
 modest (37 x 9 x 100 ~= 33k doubles); for large grids prefer the
 streaming `runR23AasEirpCdfGrid` runner.
 
+## SSB broadcast sweep option (`opts.ssb`) — never touches the traffic stats
+
+`runR23AasEirpCdfGrid` has an optional, **default-off** SSB broadcast
+sweep + 3GPP-time-weighted EIRP layer driven entirely by the nested
+`opts.ssb` struct. It is implemented by three new one-function-per-file
+modules that reuse the existing antenna engine
+(`imtAasSectorEirpGridFromBeams`) — no new antenna math, no Phased Array /
+5G Toolbox dependency:
+
+- `imtAasDlFrameTimeBudget.m` — counts TS 38.214 DL OFDM symbols/sec and
+  collapses them onto two spatial classes (`sweep`: SSB+SIB1+CSS-PDCCH+TRS;
+  `ue`: PDSCH+USS-PDCCH+per-UE CSI-RS), returning `alphaSweep` / `alphaUe`
+  / `alphaIdle`.
+- `imtAasTimeWeightedGrid.m` — `Pbar = alphaSweep*S + alphaUe*T` (linear),
+  with `avg_dBm` (time-average) and `peak_dBm = max(stats.max_dBm,
+  ssb.envelope_dBm)` (worst-case envelope, NOT a power sum).
+- `imtAasSsbOption.m` — builds the sweep tiers and drives the two above.
+
+**Hard invariant: `opts.ssb` never mutates `stats` or `percentileMaps`.**
+The sweep runs *after* the streaming aggregator and the power self-check,
+attaches only to NEW output fields (`out.ssb`, `out.timeWeighted`,
+`out.metadata.includesSsbSweep` / `.ssbConfig`), and uses deterministic
+(non-random) sweep beams. When `opts.ssb` is absent/`[]`, the traffic
+`stats` / `percentileMaps` / self-check are byte-identical to before for a
+fixed seed (`test_runR23AasEirpCdfGrid_ssb` enforces this). The traffic
+`stats` struct — including `stats.max_dBm` — is READ-ONLY to this path.
+This is a broadcast duty-cycle model, distinct from the per-UE PMI
+codebook selection in `opts.beamSelection = 'codebook'`.
+
 ## Angle conventions (matched to pycraf and M.2101)
 
 - External `azim ∈ [-180°, 180°]`, `elev ∈ [-90°, 90°]`
