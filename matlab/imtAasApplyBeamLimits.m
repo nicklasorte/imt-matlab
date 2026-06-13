@@ -1,17 +1,31 @@
-function beam = imtAasApplyBeamLimits(beam, sector)
+function beam = imtAasApplyBeamLimits(beam, sector, limitOpts)
 %IMTAASAPPLYBEAMLIMITS Clamp raw beam steering angles to sector / R23 limits.
 %
 %   BEAM = imtAasApplyBeamLimits(BEAM)
 %   BEAM = imtAasApplyBeamLimits(BEAM, SECTOR)
+%   BEAM = imtAasApplyBeamLimits(BEAM, SECTOR, LIMITOPTS)
 %
 %   Adds clipped steering fields to BEAM by clamping the raw steering
 %   angles to SECTOR.azLimitsDeg and SECTOR.elLimitsDeg. The raw fields
 %   are preserved.
 %
 %   Inputs:
-%       BEAM    struct produced by imtAasUeToBeamAngles (must have
-%               rawSteerAzDeg / rawSteerElDeg fields).
-%       SECTOR  optional sector struct; if omitted, BEAM.sector is used.
+%       BEAM      struct produced by imtAasUeToBeamAngles (must have
+%                 rawSteerAzDeg / rawSteerElDeg fields).
+%       SECTOR    optional sector struct; if omitted, BEAM.sector is used.
+%       LIMITOPTS optional struct. Recognised fields:
+%                   .clampElevation  logical (default true). When true the
+%                                    elevation steering is clamped to the
+%                                    nominal SECTOR.elLimitsDeg vertical-
+%                                    coverage gate ([-10, 0] deg). When
+%                                    false the elevation gate is disabled
+%                                    by swapping the elevation limit vector
+%                                    to [-Inf, Inf], so steerElDeg == rawEl,
+%                                    wasElClipped is all-false, and the
+%                                    reported elLimitsDeg is [-Inf, Inf]
+%                                    (the audit signal for "no elevation
+%                                    clamp"). Azimuth clamping is
+%                                    UNAFFECTED in both modes.
 %
 %   Output struct fields appended:
 %       steerAzDeg     clamped azimuth steering [deg]
@@ -19,7 +33,8 @@ function beam = imtAasApplyBeamLimits(beam, sector)
 %       wasAzClipped   logical, true where rawSteerAzDeg was clipped
 %       wasElClipped   logical, true where rawSteerElDeg was clipped
 %       azLimitsDeg    1x2 azimuth limits [deg]
-%       elLimitsDeg    1x2 elevation limits [deg]
+%       elLimitsDeg    1x2 elevation limits [deg] ([-Inf, Inf] when
+%                      clampElevation is false)
 %
 %   See also: imtAasUeToBeamAngles, imtAasGenerateBeamSet.
 
@@ -39,8 +54,26 @@ function beam = imtAasApplyBeamLimits(beam, sector)
         end
     end
 
+    if nargin < 3 || isempty(limitOpts)
+        limitOpts = struct();
+    end
+    if isfield(limitOpts, 'clampElevation') && ~isempty(limitOpts.clampElevation)
+        clampElevation = logical(limitOpts.clampElevation);
+    else
+        clampElevation = true;
+    end
+
+    % Azimuth limits are always the nominal sector envelope. The elevation
+    % gate is disabled (clip-free) by swapping its limit vector to
+    % [-Inf, Inf]: all downstream min/max + wasClipped arithmetic is then
+    % unchanged but steerElDeg == rawEl, wasElClipped is all-false, and the
+    % reported elLimitsDeg becomes [-Inf, Inf] (the no-clamp audit signal).
     azLim = sector.azLimitsDeg;
-    elLim = sector.elLimitsDeg;
+    if clampElevation
+        elLim = sector.elLimitsDeg;     % nominal [-10 0]
+    else
+        elLim = [-Inf, Inf];            % elevation gate disabled
+    end
 
     rawAz = beam.rawSteerAzDeg(:);
     rawEl = beam.rawSteerElDeg(:);
