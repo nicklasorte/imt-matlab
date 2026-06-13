@@ -29,6 +29,8 @@ function out = runR23AasEirpCdfGrid(varargin)
 %        opts.outputCsvPath, opts.outputMetadataPath,
 %        opts.numUesPerSector, opts.maxEirpPerSector_dBm,
 %        opts.environment, opts.computePointingHeatmap,
+%        opts.computePointingHistogram, opts.pointingAzBinEdgesDeg,
+%        opts.pointingElBinEdgesDeg,
 %        opts.clampElevation, opts.beamSelection, opts.codebookOversample,
 %        opts.outputDomain, opts.gainBinEdgesDbi.
 %      The flat OPTS struct also accepts the same AAS geometry fields as
@@ -141,6 +143,27 @@ function out = runR23AasEirpCdfGrid(varargin)
 %                             .summaryStatistic     'meanAcrossSnapshots'
 %                             .azWrappedConvention  'circular mean atan2d'
 %                             .numSamples           Naz x Nel uint32
+%       .pointingHistogram  joint (steering az, steering el) pointing-angle
+%                           distribution over ALL beams and ALL snapshots
+%                           (enabled by opts.computePointingHistogram).
+%                           Distinct from .pointing, which is the per-cell
+%                           MEAN pointing direction; this is the PMF of
+%                           where the array actually points. It is NOT
+%                           time-weighted (see metadata.notes). Fields:
+%                             .counts           nAzBin x nElBin (az = rows)
+%                             .pmf              counts / numInRange
+%                             .azEdges/.elEdges bin edges [deg]
+%                             .azCenters/.elCenters bin centers [deg]
+%                             .azMarginalCounts sum over el (nAzBin x 1)
+%                             .elMarginalCounts sum over az (nElBin x 1)
+%                             .numSamples       numBeams * numMc
+%                             .numInRange       samples landing in a bin
+%                             .numOutOfRange    samples dropped by binning
+%                                               (numInRange + numOutOfRange
+%                                                == numSamples; no silent
+%                                                drops)
+%                           When disabled, counts/pmf/marginals are empty
+%                           and edges/centers are still populated.
 %       .selfCheck          power-semantics self-check struct:
 %                             .powerSemantics       expected vs observed
 %                                                   sector / per-beam peak
@@ -167,7 +190,8 @@ function out = runR23AasEirpCdfGrid(varargin)
 %             imtAasSingleSectorParams, imtAasGenerateBeamSet,
 %             imtAasSectorEirpGridFromBeams, update_eirp_histograms,
 %             eirp_percentile_maps, plotR23AasEirpCdfGrid,
-%             plotR23AasPointingHeatmap.
+%             plotR23AasPointingHeatmap, plotR23AasPointingHistogram,
+%             imtAasPointingHistogram.
 
     % ---- argument resolution ----------------------------------------
     [opts, nestedParams, geom] = resolveInputs(varargin);
@@ -245,6 +269,20 @@ function out = runR23AasEirpCdfGrid(varargin)
                                         nestedParams.sim.splitSectorPower);
     opts.computePointingHeatmap = getOpt(opts, 'computePointingHeatmap', ...
                                         nestedParams.sim.computePointingHeatmap);
+
+    % ---- pointing-angle histogram (non-breaking; default OFF) --------
+    % Joint 2-D Monte Carlo distribution of the antenna POINTING ANGLES
+    % (steering az/el across all beams and all snapshots). Distinct from
+    % the MEAN-pointing heatmap above (out.pointing): this is the
+    % probability distribution of where the array actually points. It reads
+    % the already-generated beams.steerAzDeg/El (no extra RNG draws, no
+    % per-beam EIRP grids), so the default-OFF path is byte-identical.
+    %   Az +/-60 spans the sector coverage; el reaches -50 so the default
+    %   edges cover BOTH the clamped [-10,0] case and the no-clamp case
+    %   where beams steer to ~ -45. Both edge sets are overridable.
+    opts.computePointingHistogram = getOpt(opts, 'computePointingHistogram', false);
+    opts.pointingAzBinEdgesDeg    = getOpt(opts, 'pointingAzBinEdgesDeg', -60:2:60);
+    opts.pointingElBinEdgesDeg    = getOpt(opts, 'pointingElBinEdgesDeg', -50:1:5);
 
     % ---- output domain (non-breaking; default 'eirp') ---------------
     % 'gain' and 'both' both compute EIRP + gain: EIRP is nearly free (the
@@ -361,6 +399,20 @@ function out = runR23AasEirpCdfGrid(varargin)
         pointAgg.numSamples = zeros(Naz, Nel, 'uint32');
     end
 
+    % ---- init pointing-angle histogram aggregator -------------------
+    % Independent of computePointing and of returnPerBeam: it bins the
+    % applied beam steering directions only. Fixed-size accumulator (no
+    % per-draw cube), in the same streaming spirit as stats.
+    computePointingHist = logical(opts.computePointingHistogram);
+    azEdges = double(opts.pointingAzBinEdgesDeg(:).');
+    elEdges = double(opts.pointingElBinEdgesDeg(:).');
+    if computePointingHist
+        histAgg = struct();
+        histAgg.counts        = zeros(numel(azEdges) - 1, numel(elEdges) - 1);
+        histAgg.numSamples    = 0;
+        histAgg.numOutOfRange = 0;
+    end
+
     % ---- seed once and advance the global stream from there --------
     if ~isempty(opts.seed)
         rng(opts.seed);
@@ -404,6 +456,17 @@ function out = runR23AasEirpCdfGrid(varargin)
             pointAgg.sumSinAz   = pointAgg.sumSinAz   + sind(selAz);
             pointAgg.sumEl      = pointAgg.sumEl      + selEl;
             pointAgg.numSamples = pointAgg.numSamples + uint32(1);
+        end
+
+        if computePointingHist
+            % Bin THIS snapshot's applied steering directions (all beams)
+            % and fold into the running joint histogram. Reads the beams
+            % directly -- no per-beam EIRP grid, no extra RNG.
+            hk = imtAasPointingHistogram(beams.steerAzDeg(:), ...
+                beams.steerElDeg(:), azEdges, elEdges);
+            histAgg.counts        = histAgg.counts + hk.counts;
+            histAgg.numSamples    = histAgg.numSamples + numel(beams.steerAzDeg);
+            histAgg.numOutOfRange = histAgg.numOutOfRange + hk.numOutOfRange;
         end
 
         if progressEvery > 0 && mod(it, progressEvery) == 0
@@ -457,6 +520,50 @@ function out = runR23AasEirpCdfGrid(varargin)
             'units',            'degrees');
     end
     tic;
+
+    % ---- pointing-angle histogram finalize --------------------------
+    % Joint (az, el) pointing PMF over all beams and all snapshots. When
+    % disabled, mirror the `pointing` placeholder: counts/pmf/marginals
+    % empty, edges/centers still populated. This is NOT time-weighted
+    % (consistent with metadata.notes); it is the Monte Carlo distribution
+    % of UE-driven beam pointing directions.
+    azCenters = azEdges(1:end-1) + diff(azEdges) / 2;
+    elCenters = elEdges(1:end-1) + diff(elEdges) / 2;
+    if computePointingHist
+        total = sum(histAgg.counts(:));
+        pmf   = histAgg.counts ./ max(total, 1);
+        pointingHistogram = struct( ...
+            'counts',           histAgg.counts, ...
+            'pmf',              pmf, ...
+            'azEdges',          azEdges, ...
+            'elEdges',          elEdges, ...
+            'azCenters',        azCenters, ...
+            'elCenters',        elCenters, ...
+            'azMarginalCounts', sum(histAgg.counts, 2), ...
+            'elMarginalCounts', sum(histAgg.counts, 1).', ...
+            'numSamples',       histAgg.numSamples, ...
+            'numInRange',       total, ...
+            'numOutOfRange',    histAgg.numOutOfRange, ...
+            'units',            'degrees', ...
+            'frame',            'azimuth relative to sector boresight; elevation 0 = horizon', ...
+            'aggregation',      'count over all beams and all snapshots');
+    else
+        pointingHistogram = struct( ...
+            'counts',           [], ...
+            'pmf',              [], ...
+            'azEdges',          azEdges, ...
+            'elEdges',          elEdges, ...
+            'azCenters',        azCenters, ...
+            'elCenters',        elCenters, ...
+            'azMarginalCounts', [], ...
+            'elMarginalCounts', [], ...
+            'numSamples',       0, ...
+            'numInRange',       0, ...
+            'numOutOfRange',    0, ...
+            'units',            'degrees', ...
+            'frame',            'azimuth relative to sector boresight; elevation 0 = horizon', ...
+            'aggregation',      'count over all beams and all snapshots');
+    end
 
     % ---- percentile maps --------------------------------------------
     'Percentile Maps'
@@ -545,6 +652,9 @@ function out = runR23AasEirpCdfGrid(varargin)
     metadata.beamSelection         = opts.beamSelection;
     metadata.beamCodebook          = params.beamCodebook;
     metadata.computePointingHeatmap = computePointing;
+    metadata.computePointingHistogram = logical(opts.computePointingHistogram);
+    metadata.pointingHistogramAzBinsDeg = opts.pointingAzBinEdgesDeg;
+    metadata.pointingHistogramElBinsDeg = opts.pointingElBinEdgesDeg;
     metadata.clampElevation        = logical(opts.clampElevation);
     metadata.elevationLimitsDeg    = sector.elLimitsDeg;   % effective nominal gate [-10 0]
     metadata.pointingSummaryStatistic = nestedParams.sim.pointingSummaryStatistic;
@@ -626,6 +736,7 @@ function out = runR23AasEirpCdfGrid(varargin)
     out.stats          = stats;
     out.percentileMaps = pmaps;
     out.pointing       = pointing;
+    out.pointingHistogram = pointingHistogram;
     out.selfCheck      = selfCheck;
     % ---- gain heatmap outputs (always present; empty when not computed)
     % Mirrors the `pointing` disabled-placeholder pattern so the output
