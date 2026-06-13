@@ -266,6 +266,14 @@ function out = runR23AasEirpCdfGrid(varargin)
     opts.environment         = getOpt(opts, 'environment',         ...
                                         nestedParams.deployment.environment);
 
+    % ---- SSB broadcast sweep option (non-breaking; default OFF) ------
+    % opts.ssb absent / [] -> disabled, and the traffic-only outputs
+    % (stats, percentileMaps, self-check) stay byte-identical. A struct
+    % enables the always-on SSB sweep + time-weighted EIRP, attached to
+    % NEW output fields (out.ssb / out.timeWeighted) AFTER the streaming
+    % aggregator and power self-check are finalised, so neither is touched.
+    opts.ssb = resolveSsbOpts(getOpt(opts, 'ssb', []));
+
     % ---- propagate maxEirpPerSector override into params ------------
     if isnumeric(opts.maxEirpPerSector_dBm) && isscalar(opts.maxEirpPerSector_dBm) ...
             && isfinite(opts.maxEirpPerSector_dBm)
@@ -628,6 +636,22 @@ function out = runR23AasEirpCdfGrid(varargin)
             'azGrid',azGrid, 'elGrid',elGrid, 'values',[], 'binEdges',[], 'units','dBi');
     end
     out.metadata       = metadata;
+
+    % ---- optional SSB broadcast sweep + time-weighted EIRP ----------
+    % Runs AFTER the streaming aggregator and the power self-check, on
+    % NEW output fields only. opts.ssb never mutates stats / percentileMaps
+    % (the traffic-only self-check above still validates the traffic path),
+    % and the SSB beams are deterministic (no RNG draws), so the OFF path
+    % and the fixed-seed traffic outputs are unchanged.
+    if isstruct(opts.ssb) && isfield(opts.ssb, 'enable') && opts.ssb.enable
+        ssbResult        = imtAasSsbOption(azGrid, elGrid, params, sector, stats, opts.ssb);
+        out.ssb          = ssbResult.ssb;
+        out.timeWeighted = ssbResult.timeWeighted;
+        out.metadata.includesSsbSweep = true;
+        out.metadata.ssbConfig        = ssbResult.config;
+    else
+        out.metadata.includesSsbSweep = false;
+    end
 
     % ---- optional CSV export ----------------------------------------
     if ~isempty(opts.outputCsvPath)
@@ -992,6 +1016,22 @@ function [mode, cb] = resolveBeamCodebook(opts)
                     'oversampleH', os(1), ...
                     'oversampleV', os(2));
     end
+end
+
+function ssb = resolveSsbOpts(raw)
+%RESOLVESSBOPTS Read + normalize the optional opts.ssb struct.
+%   [] / absent -> struct('enable', false) (the SSB sweep is OFF and the
+%   traffic-only path is byte-identical). A struct presence enables the
+%   sweep; opts.ssb.enable defaults to true when the struct is supplied.
+    ssb = struct('enable', false);
+    if isempty(raw); return; end
+    if ~isstruct(raw)
+        error('runR23AasEirpCdfGrid:badSsbOpts', ...
+            'opts.ssb must be a struct (or empty).');
+    end
+    ssb = raw;
+    if ~isfield(ssb, 'enable') || isempty(ssb.enable); ssb.enable = true; end
+    ssb.enable = logical(ssb.enable);
 end
 
 function frame = resolveOutputFrame(opts)

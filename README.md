@@ -1081,6 +1081,105 @@ TDD activity factor, no network loading, and no propagation in this
 slice; do not interpret percentiles as the probability that a victim
 receiver sees a given EIRP unless those layers are added downstream.
 
+### Optional SSB broadcast sweep + time-weighted EIRP (`opts.ssb`)
+
+`runR23AasEirpCdfGrid` can additionally model the **always-on SSB
+broadcast beam sweep** and combine it with the UE-driven traffic grid
+into a **3GPP-time-weighted** EIRP grid. The feature is fully driven
+through a nested `opts.ssb` struct and is **default-off**:
+
+```matlab
+opts = struct();
+opts.aasGeometryPreset = 'r23_1x3_default';
+opts.ssb = struct();                          % presence enables the sweep (all defaults)
+opts.ssb.timeBudget.frame.loadFactor = 0.20;  % network load gating PDSCH + USS-PDCCH
+result = runR23AasEirpCdfGrid(opts);
+
+result.ssb           % SSB sweep grid (envelope_dBm, timeAvg_dBm, per-beam ...)
+result.timeWeighted  % Pbar = alphaSweep*S + alphaUe*T (avg_dBm, peak_dBm, share)
+result.metadata.includesSsbSweep   % true
+```
+
+When `opts.ssb` is absent or `[]`, the outputs (`stats`,
+`percentileMaps`, the power self-check, and every metadata field except
+the new boolean `metadata.includesSsbSweep`) are **byte-identical** to a
+run without the feature for a fixed seed. The SSB results are attached to
+**new** output fields (`out.ssb`, `out.timeWeighted`) and the traffic
+`stats` struct is never mutated.
+
+The sweep beams are evaluated through the **same antenna engine** as the
+traffic beams (`imtAasSectorEirpGridFromBeams`): identical normalization,
+mechanical-tilt transform and `observationFrame`. No Phased Array System
+Toolbox / 5G Toolbox dependency is introduced.
+
+#### Two-class duty-cycle model
+
+Every DL emission in TS 38.214 is counted in OFDM symbols/second
+(`imtAasDlFrameTimeBudget`) and collapsed onto two spatial map classes:
+
+| class    | signals                                            | spatial footprint |
+| -------- | -------------------------------------------------- | ----------------- |
+| `sweep`  | SSB + SIB1 + CSS-PDCCH + TRS (+ beam-mgmt CSI-RS, PRS) | the SSB beam sweep tiers |
+| `ue`     | PDSCH + USS-PDCCH + per-UE CSI-RS                   | the served-beam traffic grid |
+
+The duty-cycle fractions `alphaSweep` (load-independent) and `alphaUe`
+(scales with `loadFactor`) weight the two conditional-mean grids:
+
+```
+Pbar = alphaSweep * S + alphaUe * T          (linear mW)
+   S  = 10.^(ssb.timeAvg_dBm/10)             sweep conditional mean (mean over sweep beams)
+   T  = stats.mean_lin_mW                    UE/traffic conditional mean (Monte Carlo)
+avg_dBm = 10*log10(Pbar)
+```
+
+with `alphaIdle = max(1 - alphaSweep - alphaUe, 0)` being the idle/UL
+time that radiates nothing.
+
+#### Worst-case envelope vs. time-average
+
+Two distinct quantities are returned and must not be conflated:
+
+* **`timeWeighted.avg_dBm`** — the **time-average** EIRP per direction
+  (duty-cycle weighted). Use this for average-power / long-term
+  coexistence metrics.
+* **`timeWeighted.peak_dBm = max(stats.max_dBm, ssb.envelope_dBm)`** —
+  the **worst-case envelope**: the higher of the traffic peak and the
+  sweep peak per direction (an envelope, **not** a power sum). Use this
+  for worst-case / instantaneous limits.
+
+`timeWeighted.sweepShareOfAvg = alphaSweep*S ./ Pbar` (in `[0,1]`) is the
+fraction of the time-average power contributed by the broadcast sweep; it
+is high near the horizon broadcast tiers and low in steep-down traffic
+directions.
+
+#### `opts.ssb` schema
+
+| field | default | meaning |
+| ----- | ------- | ------- |
+| `opts.ssb` | absent → disabled | struct presence enables the sweep |
+| `.enable` | `true` (when struct) | master on/off |
+| `.coarseConf` | `[3 3 2]` (= 8 SSBs) | az-beams per elevation tier |
+| `.elTiersDeg` | `[6 0 -3]` | elevation per tier [deg] (0 = horizon, + above, − below) |
+| `.azRangeDeg` | `sector.azLimitsDeg` (± 60) | sweep azimuth span |
+| `.azPointsDeg` / `.elPointsDeg` | — | explicit per-beam lists (override `coarseConf` / `elTiersDeg`) |
+| `.splitSectorPower` | `false` | each SSB beam peaks at the full sector EIRP |
+| `.timeBudget.frame.*` | TS 38.214 (preferred) | frame-based symbol budget (see below) |
+| `.timeBudget.{numSSB,symbolsPerSSB,ssbScs_kHz,ssbPeriod_ms,dlFraction,loadFactor}` | — | legacy simple budget (back-compat) |
+
+The above-horizon `+6` / `0` deg tiers are intentional and are **not**
+clamped to the `[-10, 0]` traffic envelope (`imtAasCompositeGain`
+validates electronic steering only to ± 90 deg).
+
+The **frame** time budget (`opts.ssb.timeBudget.frame`) follows TS 38.214
+V19.2.0: `scs_kHz` (30), `loadFactor` (0.20), `tdd`
+(`.dlSlots .specialDlSymbols .ulSlots .periodSlots` = DDDSU `[3 10 1 5]`),
+`ssb` (`.L` defaults to the sweep beam count, `.symbolsPerBlock` 4,
+`.period_ms` 20), `sib`, `pdcch` (`.coresetSymbols` 1..3,
+`.broadcastShare` 0.2), `trs` (`.mapClass` `'sweep'` or `'ue'`),
+`csirsUe` (`.numUes` defaults to `numUesPerSector`), `csirsBeamMgmt`,
+`prs`, and `pdsch` (`.mappingType` / `.L`, validated against Table
+5.1.2.1-1). See `imtAasDlFrameTimeBudget` for the per-term derivation.
+
 ### Files added in this slice
 
 | file | role |
@@ -1089,16 +1188,29 @@ receiver sees a given EIRP unless those layers are added downstream.
 | `matlab/plotR23AasEirpCdfGrid.m`       | mean + per-percentile heatmaps |
 | `examples/runR23AasEirpCdfGridExample.m` | small deterministic end-to-end demo |
 | `matlab/test_runR23AasEirpCdfGrid.m`   | self tests, wired into `run_all_tests` |
+| `matlab/imtAasDlFrameTimeBudget.m`     | TS 38.214 DL OFDM-symbol time budget (sweep / UE duty cycles) |
+| `matlab/imtAasTimeWeightedGrid.m`      | time-weighted EIRP combine (`Pbar = alphaSweep*S + alphaUe*T`) |
+| `matlab/imtAasSsbOption.m`             | always-on SSB broadcast sweep builder + time-weighting driver |
+| `matlab/test_imtAasDlFrameTimeBudget.m` | time-budget self tests, wired into `run_all_tests` |
+| `matlab/test_imtAasTimeWeightedGrid.m` | time-weighted combine self tests |
+| `matlab/test_imtAasSsbOption.m`        | SSB sweep builder self tests |
+| `matlab/test_runR23AasEirpCdfGrid_ssb.m` | `opts.ssb` integration / default-off invariant tests |
 
 ### Scope (what this slice is NOT)
 
 This slice is **antenna-face EIRP only**. It does **not** add path
 loss, propagation, receiver antennas, receiver gain, I / N, FS / FSS
 receiver geometry, coordination-distance logic, multi-site / 19-site
-aggregation, IMT / UE scheduling, TDD activity factor, network loading
-factor, or full SSB / CSI-RS / PMI beam acquisition. The UE-driven
-beam pointing is a first approximation; SSB / PDSCH / PMI is a
-follow-up PR and lives below the streaming aggregator.
+aggregation, or IMT / UE scheduling.
+
+An **optional** always-on SSB broadcast sweep and a 3GPP-time-weighted
+(TDD- and load-aware) EIRP combination are available via `opts.ssb`
+(see [Optional SSB broadcast sweep](#optional-ssb-broadcast-sweep--time-weighted-eirp-optsssb)
+below). They are **default-off**: when `opts.ssb` is absent the traffic
+streaming aggregator, percentile maps and power self-check are
+byte-identical to before. The SSB sweep is a broadcast duty-cycle model,
+not full per-UE CSI-RS / PMI codebook selection (that lives in the
+separate `opts.beamSelection = 'codebook'` path).
 
 ## R23 single-sector EIRP CDF MVP (BS-input-driven)
 
