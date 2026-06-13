@@ -469,6 +469,9 @@ function out = runR23AasEirpCdfGrid(varargin)
     % gainStats was accumulated over the dBi gain envelope.
     if computeGain
         gainMaps = eirp_percentile_maps(gainStats, opts.percentiles);
+        % Tag units to match the disabled-path placeholder (line ~636) so
+        % gainPercentileMaps.units is present regardless of outputDomain.
+        gainMaps.units = 'dBi';
     end
 
     % ---- power-semantics self-check ---------------------------------

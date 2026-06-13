@@ -40,21 +40,29 @@ function results = test_elevation_clamp()
 end
 
 % =====================================================================
-% Shared small Monte Carlo options (fast). numUesPerSector is set high
-% enough that, with no elevation clamp, the per-cell pointing heatmap
-% reliably reaches below the -10 deg vertical-coverage gate: area-uniform
-% radial draws put only a small fraction of any single beam below the
-% gate, so a larger simultaneous beam set keeps the driver-level
-% "points lower" assertion robust without depending on a single draw.
+% Shared small Monte Carlo options (fast). numUesPerSector is the knob
+% that controls how far the no-clamp pointing heatmap dips below the
+% -10 deg vertical-coverage gate. pointing.elevationDegGrid is the MC
+% mean of the argmax-selected beam's STEERING elevation (driven by UE
+% geometry: rawEl = atan2d(ueHeight-bsHeight, groundRange)), NOT by
+% elGridDeg -- so the el grid spanning below -10 deg is irrelevant to the
+% pointing floor (verified: widening elGridDeg leaves the no-clamp min
+% unchanged at ~-9.48 deg). With the default r23_1x3_default geometry
+% (bsHeight 18 m, ueHeight 1.5 m, rMin 35 m, rMax 400 m) only ~4.7% of
+% area-uniform UEs steer below -10 deg, so the per-cell argmax mean only
+% clears the gate once enough simultaneous beams compete per cell:
+% numUes 40 -> -9.48 deg (does NOT clear), 80 -> -11.0, 120 -> -13.3,
+% 160 -> -15.0 deg. 160 gives a ~5 deg margin below the gate (seed fixed,
+% so deterministic; the margin is robustness headroom against refactors).
 % =====================================================================
 function opts = mcOpts()
     opts = struct();
     opts.aasGeometryPreset      = 'r23_1x3_default';
     opts.numMc                  = 50;
-    opts.numUesPerSector        = 40;
+    opts.numUesPerSector        = 160;           % >=80 needed to clear the -10 deg gate; 160 -> ~-15 deg
     opts.seed                   = 3;
     opts.azGridDeg              = -120:10:120;   % 25
-    opts.elGridDeg              = -30:2:30;       % 31 (spans below -10 deg)
+    opts.elGridDeg              = -30:2:30;       % 31 (observation grid; does NOT drive the pointing floor)
     opts.binEdgesDbm            = -120:1:120;
     opts.percentiles            = [5 50 95];
     opts.computePointingHeatmap = true;
