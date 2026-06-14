@@ -32,7 +32,8 @@ function results = test_activity_weighted_cdf()
 %        IDENTICAL for 'r23_1x3_default' and 'ctia_7ghz_1x6', and the exact
 %        remapping holds for each geometry.
 %   T6.  Validation: activityWeightedCdf=true with tddActivityFactor=0,
-%        networkLoadingFactor=1.5, or tddActivityFactor=-0.1 all error.
+%        networkLoadingFactor=1.5, or tddActivityFactor=-0.1 all error
+%        with the specific 'runR23AasEirpCdfGrid:badActivityFactor' id.
 %
 %   Returns struct with .passed (logical) and .summary (cellstr).
 
@@ -147,15 +148,16 @@ function results = test_activity_weighted_cdf()
         'T5: activeFraction + onPercentileEquivalent identical for R23 1x3 and CTIA 1x6; remap holds per-geometry');
 
     % ---- T6: validation of the activity factors ---------------------
-    okZero    = expectError(@() runR23AasEirpCdfGrid(mergeOpts(baseOpts, ...
-        struct('activityWeightedCdf',true,'tddActivityFactor',0))));
-    okTooBig  = expectError(@() runR23AasEirpCdfGrid(mergeOpts(baseOpts, ...
-        struct('activityWeightedCdf',true,'networkLoadingFactor',1.5))));
-    okNeg     = expectError(@() runR23AasEirpCdfGrid(mergeOpts(baseOpts, ...
-        struct('activityWeightedCdf',true,'tddActivityFactor',-0.1))));
+    awBadId = 'runR23AasEirpCdfGrid:badActivityFactor';
+    okZero    = throwsId(@() runR23AasEirpCdfGrid(mergeOpts(baseOpts, ...
+        struct('activityWeightedCdf',true,'tddActivityFactor',0))), awBadId);
+    okTooBig  = throwsId(@() runR23AasEirpCdfGrid(mergeOpts(baseOpts, ...
+        struct('activityWeightedCdf',true,'networkLoadingFactor',1.5))), awBadId);
+    okNeg     = throwsId(@() runR23AasEirpCdfGrid(mergeOpts(baseOpts, ...
+        struct('activityWeightedCdf',true,'tddActivityFactor',-0.1))), awBadId);
     ok6 = okZero && okTooBig && okNeg;
     results = check(results, ok6, ...
-        'T6: tdd=0, load=1.5, tdd=-0.1 all error when activityWeightedCdf is true');
+        'T6: tdd=0, load=1.5, tdd=-0.1 all throw runR23AasEirpCdfGrid:badActivityFactor');
 
     fprintf('\n--- test_activity_weighted_cdf summary ---\n');
     for k = 1:numel(results.summary)
@@ -174,13 +176,13 @@ function r = check(r, cond, msg)
     end
 end
 
-function tf = expectError(fn)
-%EXPECTERROR True when FN throws.
+function tf = throwsId(fn, id)
+%THROWSID True when FN throws an MException with identifier ID.
     tf = false;
     try
         fn();
-    catch
-        tf = true;
+    catch err
+        tf = strcmp(err.identifier, id);
     end
 end
 
