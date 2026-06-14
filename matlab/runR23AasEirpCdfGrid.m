@@ -30,7 +30,7 @@ function out = runR23AasEirpCdfGrid(varargin)
 %        opts.numUesPerSector, opts.maxEirpPerSector_dBm,
 %        opts.environment, opts.computePointingHeatmap,
 %        opts.computePointingHistogram, opts.pointingAzBinEdgesDeg,
-%        opts.pointingElBinEdgesDeg,
+%        opts.pointingElBinEdgesDeg, opts.pointingWeightedMap,
 %        opts.clampElevation, opts.beamSelection, opts.codebookOversample,
 %        opts.outputDomain, opts.gainBinEdgesDbi,
 %        opts.activityWeightedCdf, opts.activityModel,
@@ -396,6 +396,31 @@ function out = runR23AasEirpCdfGrid(varargin)
 %                                                drops)
 %                           When disabled, counts/pmf/marginals are empty
 %                           and edges/centers are still populated.
+%       .pointingWeightedMap  OPT-IN (opts.pointingWeightedMap) max-EIRP
+%                           main-beam map weighted by the pointing PMF: the
+%                           PEAK sector EIRP / peak antenna gain scaled by the
+%                           probability the array steers at each (az, el) on
+%                           the SAME observation grid (azGrid x elGrid) as the
+%                           EIRP / gain heatmaps. The "worst-case-but-likely"
+%                           main beam for the FSS-zone (0,0) analysis. It
+%                           reads beams.steerAzDeg/El directly (no extra RNG,
+%                           does NOT force returnPerBeam) and leaves the raw
+%                           maps untouched. Fields:
+%                             .azGrid/.elGrid    observation grid [deg]
+%                             .pmf               Naz x Nel pointing PMF
+%                                                (sums to 1 over in-range cells)
+%                             .eirpWeightedDbm   Naz x Nel = peakEirpDbm +
+%                                                10*log10(pmf) [dBm/100MHz];
+%                                                -Inf where pmf == 0
+%                             .gainWeightedDbi   Naz x Nel = peakGainDbi +
+%                                                10*log10(pmf) [dBi]
+%                             .peakEirpDbm/.peakGainDbi  the resolved peaks
+%                             .numSamples/.numInRange/.numOutOfRange  bookkeeping
+%                                                (numInRange + numOutOfRange ==
+%                                                numSamples; no silent drops)
+%                             .units/.note
+%                           When disabled, pmf / weighted maps are empty and
+%                           azGrid/elGrid + the peak scalars are populated.
 %       .selfCheck          power-semantics self-check struct:
 %                             .powerSemantics       expected vs observed
 %                                                   sector / per-beam peak
@@ -494,7 +519,7 @@ function out = runR23AasEirpCdfGrid(varargin)
 %             imtAasSectorEirpGridFromBeams, update_eirp_histograms,
 %             eirp_percentile_maps, plotR23AasEirpCdfGrid,
 %             plotR23AasPointingHeatmap, plotR23AasPointingHistogram,
-%             imtAasPointingHistogram.
+%             plotR23AasPointingWeightedMap, imtAasPointingHistogram.
 
     % ---- argument resolution ----------------------------------------
     [opts, nestedParams, geom] = resolveInputs(varargin);
@@ -586,6 +611,17 @@ function out = runR23AasEirpCdfGrid(varargin)
     opts.computePointingHistogram = getOpt(opts, 'computePointingHistogram', false);
     opts.pointingAzBinEdgesDeg    = getOpt(opts, 'pointingAzBinEdgesDeg', -60:2:60);
     opts.pointingElBinEdgesDeg    = getOpt(opts, 'pointingElBinEdgesDeg', -50:1:5);
+
+    % ---- probability-weighted pointing map (non-breaking; default OFF) -
+    % EXPLICIT trigger for the max-EIRP main-beam map weighted by the
+    % probability the antenna actually steers there. The main beam's PEAK is
+    % essentially constant (= sector peak EIRP, = peak antenna gain); only its
+    % POINTING direction varies, so the weighted map is the peak scalar scaled
+    % by the pointing PMF evaluated on the SAME observation grid (azGrid x
+    % elGrid) as the EIRP / gain heatmaps. It reads the already-generated
+    % beams.steerAzDeg/El (no extra RNG draws, no per-beam EIRP grids, no
+    % returnPerBeam), so the default-OFF path is byte-identical.
+    opts.pointingWeightedMap = getOpt(opts, 'pointingWeightedMap', false);
 
     % ---- output domain (non-breaking; default 'eirp') ---------------
     % 'gain' and 'both' both compute EIRP + gain: EIRP is nearly free (the
@@ -811,6 +847,20 @@ function out = runR23AasEirpCdfGrid(varargin)
         histAgg.numOutOfRange = 0;
     end
 
+    % ---- init probability-weighted pointing-map aggregator -----------
+    % Independent of computePointing / computePointingHist / returnPerBeam:
+    % it bins the applied beam steering directions onto the OBSERVATION grid
+    % (azGrid x elGrid, the same grid as the EIRP / gain heatmaps) so the
+    % resulting PMF can scale the peak sector EIRP / peak antenna gain in
+    % place. Observation-grid bin edges come from the grid CENTERS. Fixed-size
+    % accumulator (no per-draw cube), in the same streaming spirit as stats.
+    computePointingWeighted = logical(opts.pointingWeightedMap);
+    if computePointingWeighted
+        obsAzEdges = centersToEdges(azGrid);   % length Naz+1
+        obsElEdges = centersToEdges(elGrid);   % length Nel+1
+        pwAgg = struct('counts', zeros(Naz, Nel), 'numSamples', 0, 'numOutOfRange', 0);
+    end
+
     % ---- seed once and advance the global stream from there --------
     if ~isempty(opts.seed)
         rng(opts.seed);
@@ -1013,6 +1063,20 @@ function out = runR23AasEirpCdfGrid(varargin)
             histAgg.numOutOfRange = histAgg.numOutOfRange + hk.numOutOfRange;
         end
 
+        if computePointingWeighted
+            % Bin THIS snapshot's applied steering directions onto the
+            % observation grid and fold into the running pointing PMF. Reads
+            % the beams directly -- no per-beam EIRP grid, no extra RNG.
+            saz = beams.steerAzDeg(:);
+            sel = beams.steerElDeg(:);
+            cc  = histcounts2(saz, sel, obsAzEdges, obsElEdges);   % [Naz x Nel]
+            inRange = saz >= obsAzEdges(1) & saz <= obsAzEdges(end) & ...
+                      sel >= obsElEdges(1) & sel <= obsElEdges(end);
+            pwAgg.counts        = pwAgg.counts + cc;
+            pwAgg.numSamples    = pwAgg.numSamples + numel(saz);
+            pwAgg.numOutOfRange = pwAgg.numOutOfRange + sum(~inRange);
+        end
+
         if progressEvery > 0 && mod(it, progressEvery) == 0
             tElapsed   = toc(tStart);
             tPerDraw   = tElapsed / it;
@@ -1107,6 +1171,58 @@ function out = runR23AasEirpCdfGrid(varargin)
             'units',            'degrees', ...
             'frame',            'azimuth relative to sector boresight; elevation 0 = horizon', ...
             'aggregation',      'count over all beams and all snapshots');
+    end
+
+    % ---- probability-weighted pointing map finalize -----------------
+    % Max-EIRP main beam (peak sector EIRP / peak antenna gain) weighted by
+    % the pointing PMF on the observation grid. The peak is constant; only
+    % its pointing direction varies, so:
+    %   eirpWeightedDbm(az,el) = sectorEirpDbm + 10*log10(P_point(az,el))
+    %   gainWeightedDbi(az,el) = peakGainDbi   + 10*log10(P_point(az,el))
+    % with P_point = 0 -> -Inf. Scan loss is conservatively neglected. This
+    % is NOT the full gain/EIRP percentile heatmap multiplied by the PMF (that
+    % map carries sidelobes from beams pointing elsewhere); it is the PEAK
+    % scalar only. When disabled, mirror the `pointing` placeholder: azGrid /
+    % elGrid and scalars populated, pmf / weighted maps empty.
+    peakEirpDbm = params.sectorEirpDbm;             % resolved peak sector EIRP [dBm/100MHz]
+    peakGainDbi = geom.calculatedAntennaGainDbi;    % resolved peak antenna gain [dBi]
+    pwUnits = ['eirpWeightedDbm = dBm/100MHz + 10log10(P_point); ', ...
+        'gainWeightedDbi = dBi + 10log10(P_point)'];
+    pwNote = ['Max-EIRP main beam weighted by pointing probability (peak ', ...
+        'sector EIRP / peak gain scaled by the pointing PMF on the ', ...
+        'observation grid). Conservative single-beam peak; scan loss ', ...
+        'neglected. Cells the beam never points to are -Inf.'];
+    if computePointingWeighted
+        total  = sum(pwAgg.counts(:));
+        pmf    = pwAgg.counts ./ max(total, 1);     % [Naz x Nel], sums to 1 over in-range cells
+        pmfDb  = 10 * log10(pmf);                   % -Inf where pmf == 0
+        pointingWeightedMap = struct( ...
+            'azGrid',          azGrid, ...
+            'elGrid',          elGrid, ...
+            'pmf',             pmf, ...
+            'eirpWeightedDbm', peakEirpDbm + pmfDb, ...
+            'gainWeightedDbi', peakGainDbi + pmfDb, ...
+            'peakEirpDbm',     peakEirpDbm, ...
+            'peakGainDbi',     peakGainDbi, ...
+            'numSamples',      pwAgg.numSamples, ...
+            'numInRange',      total, ...
+            'numOutOfRange',   pwAgg.numOutOfRange, ...
+            'units',           pwUnits, ...
+            'note',            pwNote);
+    else
+        pointingWeightedMap = struct( ...
+            'azGrid',          azGrid, ...
+            'elGrid',          elGrid, ...
+            'pmf',             [], ...
+            'eirpWeightedDbm', [], ...
+            'gainWeightedDbi', [], ...
+            'peakEirpDbm',     peakEirpDbm, ...
+            'peakGainDbi',     peakGainDbi, ...
+            'numSamples',      0, ...
+            'numInRange',      0, ...
+            'numOutOfRange',   0, ...
+            'units',           pwUnits, ...
+            'note',            pwNote);
     end
 
     % ---- percentile maps --------------------------------------------
@@ -1219,6 +1335,7 @@ function out = runR23AasEirpCdfGrid(varargin)
     metadata.computePointingHistogram = logical(opts.computePointingHistogram);
     metadata.pointingHistogramAzBinsDeg = opts.pointingAzBinEdgesDeg;
     metadata.pointingHistogramElBinsDeg = opts.pointingElBinEdgesDeg;
+    metadata.pointingWeightedMap        = logical(opts.pointingWeightedMap);
     metadata.clampElevation        = logical(opts.clampElevation);
     metadata.elevationLimitsDeg    = sector.elLimitsDeg;   % effective nominal gate [-10 0]
     metadata.pointingSummaryStatistic = nestedParams.sim.pointingSummaryStatistic;
@@ -1301,6 +1418,7 @@ function out = runR23AasEirpCdfGrid(varargin)
     out.percentileMaps = pmaps;
     out.pointing       = pointing;
     out.pointingHistogram = pointingHistogram;
+    out.pointingWeightedMap = pointingWeightedMap;
     out.selfCheck      = selfCheck;
     % ---- gain heatmap outputs (always present; empty when not computed)
     % Mirrors the `pointing` disabled-placeholder pattern so the output
@@ -2311,6 +2429,21 @@ function v = getOpt(opts, name, defaultVal)
     else
         v = defaultVal;
     end
+end
+
+function edges = centersToEdges(centers)
+%CENTERSTOEDGES Bin edges from ascending grid centers.
+%   Interior edges are the midpoints between adjacent centers; the outer two
+%   edges are extended by half the end step. Requires ascending centers
+%   (azGrid / elGrid are ascending). For a single center the bin is given
+%   unit width so the edges remain strictly ascending.
+    c = double(centers(:).');
+    if isscalar(c)
+        edges = [c - 0.5, c + 0.5];
+        return;
+    end
+    mids  = (c(1:end-1) + c(2:end)) / 2;
+    edges = [c(1) - (c(2) - c(1)) / 2, mids, c(end) + (c(end) - c(end-1)) / 2];
 end
 
 function s = iso8601Now()
