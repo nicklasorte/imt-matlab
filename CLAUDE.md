@@ -247,6 +247,79 @@ in `out.layering.perLayerPeakEirpDbm`. This is distinct from the `opts.ssb`
 broadcast duty-cycle model, the `opts.epre` per-RE density, and the
 `opts.beamSelection` codebook path.
 
+## PRB / bandwidth weighting option (`opts.prbWeighting`) — SENSITIVITY ONLY, departs from ITU
+
+`runR23AasEirpCdfGrid` has an optional, **default-off** per-UE PRB /
+bandwidth weighting layer driven by the nested `opts.prbWeighting` struct.
+It replaces the uniform per-beam power split (`sectorEirp − 10·log10(N)`,
+every beam equal) with an **unequal per-UE bandwidth (PRB) weighting**:
+each co-scheduled UE gets a fractional bandwidth share `f_u` (Σ f_u = 1),
+and at constant EPRE (3GPP **TS 38.214 V19.2.0 Clause 4.1**) its
+band-integrated power is proportional to its PRB share, so
+`perBeamEirp_u = sectorEirp + 10·log10(f_u)`. Implemented by one new
+one-function-per-file module that reuses the existing antenna engine — **no
+new antenna math**:
+
+- `imtAasPrbWeights.m` — pure-except-for-RNG weight generator. Returns the
+  per-beam linear power-fraction `wBeam` (Σ = 1), the per-UE share vector
+  `ueShares` (Σ = 1), a `participationRatio = 1/Σ f_u²` (effective number of
+  UEs), the resolved `config`, and a `specReference`. `mode` `'fixed'`
+  (normalized `weights`, no RNG) or `'random'` (toolbox-free **log-normal
+  softmax**: `e = exp(sigma·randn(1,Nue)); f = e/Σe`, exactly `Nue` `randn`
+  draws when `sigma > 0`, **no** `gamrnd` / Dirichlet). `spread = 0` → equal
+  shares (no RNG). Composes with `opts.layering` via `layerUeIndex`: a UE's
+  share is divided equally across its `r_u` layers
+  (`wBeam(l) = f_u / r_u`). The dB conversion happens at the call site, not
+  in the helper.
+
+**Unlike `opts.epre`** (a separate per-RE envelope) **and unlike
+`opts.layering`** (which reshapes the CDF but keeps the ITU power-split
+*philosophy*), `opts.prbWeighting` **deliberately departs from the ITU
+M.2101 equal-bandwidth *assumption*** (IMT characteristics Table A-2,
+Note 1: *"UEs share equally the channel bandwidth"*). It is therefore an
+**explicitly-labelled sensitivity scenario that is NOT ITU-compliant**: it
+**must never** become the default, the equal-split ITU case **remains the
+reference**, and weighted results are to be presented **alongside** (never
+*instead of*) the baseline. This is for a federal regulatory paper — the
+divergence from ITU must be unmistakable in `out.prbWeighting.notes` /
+metadata.
+
+**Invariants (enforced by `test_imtAasPrbWeights` and
+`test_runR23AasEirpCdfGrid_prbWeighting`):**
+
+- **Byte-identical when off.** When `opts.prbWeighting` is absent/`[]` (or
+  `enable=false`), `imtAasPrbWeights` is **not called at all** → zero extra
+  RNG → `stats`, `percentileMaps`, `selfCheck`, `out.ssb`, `out.epre`,
+  `out.layering` are byte-identical to before for a fixed seed.
+  `out.prbWeighting = []`, `out.metadata.includesPrbWeighting = false`.
+- **Equal shares == off WITHIN TOLERANCE (NOT byte-identical).** The off
+  path computes the scalar `sectorEirp − 10·log10(N)`; the enabled-equal
+  path computes the per-beam vector `sectorEirp + 10·log10(1/N)`.
+  Mathematically equal but a **different floating-point expression**, so
+  they can differ in the last ULP. Asserted as `percentileMaps.values`
+  within `1e-6` dB **and** `sum_lin_mW` within relative `1e-9` — do **not**
+  assert `isequal` on `stats.counts` (integer histogram counts can differ
+  by ±1 at a bin boundary). Equal shares consume zero RNG.
+- **Power conserved.** Σ f_u = 1, so total power is conserved — only the
+  **spatial distribution** of where the power lands changes. The
+  band-integrated sector peak and the power self-check (observed aggregate
+  max `≤ sectorEirp`) are unchanged in **bound**.
+- **Band-integrated only.** Frequency-selective occupancy (a narrowband
+  victim seeing only the beams present on its sub-band) is the **separate
+  subband / PRG item** and is out of scope; the channel bandwidth and the
+  dBm/MHz normalization basis are unchanged.
+
+Like `opts.layering`, enabling `opts.prbWeighting` **does reshape `stats` /
+`percentileMaps` / the EIRP CDF** — that is the point. With it on, the
+scalar `metadata.perBeamPeakEirpDbm` is the fixed-N equal-split nominal, not
+the realized per-beam power; the realized distribution is in
+`out.prbWeighting.perBeamPeakEirpDbm`. The scheduler / PRB-allocation model
+is **statistical** (PRB allocation is implementation-defined in TS 38.214),
+**not a normative algorithm**. This is distinct from the `opts.ssb`
+broadcast duty-cycle model, the `opts.epre` per-RE density, the
+`opts.layering` rank/MU-MIMO model, and the `opts.beamSelection` codebook
+path.
+
 ## Angle conventions (matched to pycraf and M.2101)
 
 - External `azim ∈ [-180°, 180°]`, `elev ∈ [-90°, 90°]`
