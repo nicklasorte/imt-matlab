@@ -6,8 +6,15 @@ function params = r23DefaultParams(environment)
 %
 %   Returns a nested struct of all parameters for the R23 7.125-8.4 GHz
 %   IMT macro Extended-AAS deployment. ENVIRONMENT is one of:
-%       'urban'      |  'macroUrban'      (default)
-%       'suburban'   |  'macroSuburban'
+%       'urban'           |  'macroUrban'      (default)
+%       'suburban'        |  'macroSuburban'
+%       'micro'           |  'microUrban'
+%       'microSuburban'
+%
+%   The 'micro*' environments select the ITU-R R23 7.125-8.4 GHz Small
+%   cell outdoor / Micro urban deployment geometry (6 m BS height,
+%   density-derived cell radius). Pair with the 'r23_micro_8x8' AAS
+%   geometry preset for the full micro reference.
 %
 %   Source: ITU-R IMT characteristics for the 7.125-8.4 GHz band /
 %   R23 macro reference. Macro urban and macro suburban share the
@@ -68,10 +75,31 @@ function params = r23DefaultParams(environment)
             bsHeight_m           = 20;
             bsDensityPerKm2      = 2.4;
             belowRooftopFraction = 0.15;
+        case {'micro', 'microurban'}
+            % ITU-R R23 7.125-8.4 GHz Small cell outdoor / Micro urban.
+            % Cell radius derived from the 7 GHz micro density
+            % (30 BS/km^2 urban, 1 sector/BS) -> ~180 m area-equivalent
+            % radius (confirm with WG; easily overridable). BS height 6 m.
+            tag                  = 'microUrban';
+            cellRadius_m         = 180;
+            bsHeight_m           = 6;
+            bsDensityPerKm2      = 30;
+            belowRooftopFraction = 1.0;   % small cell sits below rooftop
+        case 'microsuburban'
+            % ITU-R R23 7.125-8.4 GHz Small cell outdoor / Micro suburban.
+            % Cell radius derived from the 7 GHz micro density
+            % (10 BS/km^2 suburban, 1 sector/BS) -> ~300 m area-equivalent
+            % radius (confirm with WG; easily overridable). BS height 6 m.
+            tag                  = 'microSuburban';
+            cellRadius_m         = 300;
+            bsHeight_m           = 6;
+            bsDensityPerKm2      = 10;
+            belowRooftopFraction = 1.0;   % small cell sits below rooftop
         otherwise
             error('r23DefaultParams:unknownEnvironment', ...
                 ['Unknown environment "%s". Supported: ' ...
-                 '''urban'' (''macroUrban''), ''suburban'' (''macroSuburban'').'], ...
+                 '''urban'' (''macroUrban''), ''suburban'' (''macroSuburban''), ' ...
+                 '''micro'' (''microUrban''), ''microSuburban''.'], ...
                 environment);
     end
 

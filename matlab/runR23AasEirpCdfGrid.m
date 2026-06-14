@@ -69,6 +69,15 @@ function out = runR23AasEirpCdfGrid(varargin)
 %              6 elements per sub-array, 768 total elements across two
 %              polarizations, ~32.2 dBi antenna gain, ~90.8 dBm sector
 %              EIRP at 58.6 dBm conducted power).
+%       runR23AasEirpCdfGrid('aasGeometryPreset', 'r23_micro_8x8', ...
+%                            'environment', 'microUrban')
+%           -> ITU-R R23 7.125-8.4 GHz Small cell outdoor / Micro urban
+%              reference (8x8 ELEMENT array, no sub-array, ~24.46 dBi
+%              antenna gain, 61.5 dBm sector EIRP, 6 m BS height,
+%              [-30, 0] elevation coverage, 10 deg mechanical tilt).
+%              The geometry preset and the environment are independent
+%              knobs, but the 'r23_micro_8x8' preset is intended to be
+%              paired with environment 'microUrban' / 'microSuburban'.
 %       runR23AasEirpCdfGrid('aasGeometryPreset', 'custom', ...
 %                            'arrayRows', 4, 'arrayCols', 16, ...
 %                            'subarrayElementRows', 6, ...)
@@ -1562,6 +1571,10 @@ function dep = environmentToDeployment(env)
             dep = 'macroUrban';
         case {'suburban', 'macrosuburban'}
             dep = 'macroSuburban';
+        case {'micro', 'microurban'}
+            dep = 'microUrban';
+        case {'microsuburban'}
+            dep = 'microSuburban';
         otherwise
             dep = char(env);
     end

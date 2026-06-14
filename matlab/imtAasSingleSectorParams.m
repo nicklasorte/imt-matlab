@@ -14,8 +14,14 @@ function sector = imtAasSingleSectorParams(deployment, params)
 %   Inputs:
 %       DEPLOYMENT  optional char/string (default 'macroUrban'). Supported
 %                   values:
-%                       'macroUrban'    bsHeight = 18 m,  cellRadius = 400 m
-%                       'macroSuburban' bsHeight = 20 m,  cellRadius = 800 m
+%                       'macroUrban'    bsHeight = 18 m, cellRadius = 400 m,
+%                                       elLimits = [-10, 0]
+%                       'macroSuburban' bsHeight = 20 m, cellRadius = 800 m,
+%                                       elLimits = [-10, 0]
+%                       'microUrban'    bsHeight =  6 m, cellRadius = 180 m,
+%                                       elLimits = [-30, 0]
+%                       'microSuburban' bsHeight =  6 m, cellRadius = 300 m,
+%                                       elLimits = [-30, 0]
 %       PARAMS      optional imtAasDefaultParams struct (default
 %                   imtAasDefaultParams()).
 %
@@ -30,10 +36,12 @@ function sector = imtAasSingleSectorParams(deployment, params)
 %       sectorWidthDeg     sector horizontal coverage [deg] (120)
 %       azLimitsDeg        steering azimuth limits relative to boresight
 %                          [-60, 60] deg
-%       elLimitsDeg        steering elevation limits [-10, 0] deg
-%                          (R23 vertical coverage 90-100 deg global theta
-%                          maps to elevation [-10, 0] in this repo's
-%                          (az, el) convention)
+%       elLimitsDeg        steering elevation limits [deg], deployment-
+%                          dependent. Macro: [-10, 0] (R23 vertical
+%                          coverage 90-100 deg global theta). Micro:
+%                          [-30, 0] (small-cell vertical coverage 90-120
+%                          deg global theta). Both map from global theta
+%                          to elevation in this repo's (az, el) convention.
 %       params             AAS antenna params struct (passthrough)
 %
 %   See also: imtAasSampleUePositions, imtAasUeToBeamAngles,
@@ -53,19 +61,41 @@ function sector = imtAasSingleSectorParams(deployment, params)
     end
     deployment = char(deployment);
 
+    % Steering elevation limits are deployment-dependent: macro sectors
+    % cover global theta 90-100 deg ([-10, 0] elevation); micro/small-cell
+    % sectors cover 90-120 deg ([-30, 0] elevation).
     switch lower(deployment)
         case 'macrourban'
             bsHeight_m   = 18;
             cellRadius_m = 400;
+            elLimitsDeg  = [-10, 0];
             tag          = 'macroUrban';
         case 'macrosuburban'
             bsHeight_m   = 20;
             cellRadius_m = 800;
+            elLimitsDeg  = [-10, 0];
             tag          = 'macroSuburban';
+        case 'microurban'
+            % Micro urban: 6 m BS height. Cell radius derived from the
+            % 7 GHz micro density (30 BS/km^2, 1 sector/BS) -> ~180 m
+            % area-equivalent radius (confirm with WG; easily overridable).
+            bsHeight_m   = 6;
+            cellRadius_m = 180;
+            elLimitsDeg  = [-30, 0];
+            tag          = 'microUrban';
+        case 'microsuburban'
+            % Micro suburban: 6 m BS height. Cell radius derived from the
+            % 7 GHz micro density (10 BS/km^2, 1 sector/BS) -> ~300 m
+            % area-equivalent radius (confirm with WG; easily overridable).
+            bsHeight_m   = 6;
+            cellRadius_m = 300;
+            elLimitsDeg  = [-30, 0];
+            tag          = 'microSuburban';
         otherwise
             error('imtAasSingleSectorParams:unknownDeployment', ...
                 ['Unknown deployment "%s". Supported deployments: ' ...
-                 'macroUrban, macroSuburban.'], deployment);
+                 'macroUrban, macroSuburban, microUrban, microSuburban.'], ...
+                deployment);
     end
 
     sector = struct();
@@ -79,6 +109,6 @@ function sector = imtAasSingleSectorParams(deployment, params)
     sector.boresightAzDeg  = 0;
     sector.sectorWidthDeg  = 120;
     sector.azLimitsDeg     = [-60, 60];
-    sector.elLimitsDeg     = [-10,  0];
+    sector.elLimitsDeg     = elLimitsDeg;
     sector.params          = params;
 end
