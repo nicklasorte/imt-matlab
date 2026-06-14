@@ -33,7 +33,8 @@ function out = runR23AasEirpCdfGrid(varargin)
 %        opts.pointingElBinEdgesDeg,
 %        opts.clampElevation, opts.beamSelection, opts.codebookOversample,
 %        opts.outputDomain, opts.gainBinEdgesDbi,
-%        opts.activityWeightedCdf, opts.tddActivityFactor,
+%        opts.activityWeightedCdf, opts.activityModel,
+%        opts.activityOffFloorUses, opts.tddActivityFactor,
 %        opts.networkLoadingFactor, opts.activityOffFloorDbm.
 %      The flat OPTS struct also accepts the same AAS geometry fields as
 %      the name-value form:
@@ -160,10 +161,36 @@ function out = runR23AasEirpCdfGrid(varargin)
 %       region (Pon < 0, i.e. Pout <= 100*(1-p)) take opts.activityOffFloorDbm.
 %       p = 1 reproduces the raw percentileMaps exactly. p is geometry-
 %       independent, so this works for every aasGeometryPreset.
+%       opts.activityModel ('legacy' | 'frame', default 'legacy') selects
+%           the activity SOURCE so this CDF view and the opts.ssb time-
+%           weighted grid can share ONE model:
+%           'legacy' (default) -> p = tddActivityFactor*networkLoadingFactor
+%               (byte-identical historical behaviour). When BOTH this layer
+%               and opts.ssb are enabled but p disagrees with the frame-
+%               budget alphaUe, a one-shot
+%               runR23AasEirpCdfGrid:activityModelMismatch warning fires
+%               (see imtAasActivityFrameConsistency).
+%           'frame'            -> p = alphaUe from the symbol-counted TS
+%               38.214 frame budget (imtAasDlFrameTimeBudget) -- the SAME
+%               budget the time-weighted grid uses -- and the off region
+%               radiates the always-on per-cell SSB sweep level instead of a
+%               scalar floor, so F(x) = (1-p)*sweepFloor(az,el) + p*F_on,
+%               consistent with timeWeighted.avg_dBm. The frame is
+%               opts.ssb.timeBudget.frame when present, else a default frame
+%               with frame.ssb.L = sweep beam count and frame.csirsUe.numUes
+%               = numUesPerSector. With opts.ssb disabled, the default frame
+%               budget is still built for p, but the off floor falls back to
+%               the scalar opts.activityOffFloorDbm with an
+%               runR23AasEirpCdfGrid:activityFrameNoSweepFloor warning.
+%       opts.activityOffFloorUses ('timeAvg' | 'envelope', default
+%           'timeAvg') -> which per-cell SSB sweep level the 'frame' off
+%           region uses: 'timeAvg' = out.ssb.timeAvg_dBm, 'envelope' =
+%           out.ssb.envelope_dBm.
 %       Fields (all default to nestedParams.bs / -Inf):
 %           opts.tddActivityFactor    finite scalar in (0,1] (default 0.75)
 %           opts.networkLoadingFactor finite scalar in (0,1] (default 0.20;
-%               the ITU example overrides to 0.25 -> p = 0.1875)
+%               the ITU example overrides to 0.25 -> p = 0.1875). Used by the
+%               'legacy' model only; tagged legacy under 'frame'.
 %           opts.activityOffFloorDbm  off-region percentile value (default
 %               -Inf). Validated only when activityWeightedCdf is true.
 %       The raw percentileMaps remain the always-on PEAK distribution; the
@@ -203,11 +230,14 @@ function out = runR23AasEirpCdfGrid(varargin)
 %                           dBm/100MHz, plus .activeFraction (p),
 %                           .tddActivityFactor, .networkLoadingFactor,
 %                           .onPercentileEquivalent (Pon), .inOnRegion,
-%                           .offFloorDbm and .note. The raw percentileMaps
-%                           remain the always-on peak distribution; gain
-%                           maps are unaffected. This is the probability-of-
-%                           transmission model (p = tdd*load), distinct from
-%                           a flat dB offset. See opts.activityWeightedCdf.
+%                           .offFloorDbm (scalar for 'legacy', per-cell
+%                           Naz x Nel SSB sweep floor for 'frame'),
+%                           .activityModel, .offFloorUses, .note and (frame
+%                           only) .frameBudget. The raw percentileMaps remain
+%                           the always-on peak distribution; gain maps are
+%                           unaffected. The on-fraction p is either the
+%                           legacy tdd*load or the frame-budget alphaUe -- see
+%                           opts.activityModel / opts.activityWeightedCdf.
 %       .pointing           pointing-angle aggregator (when computed):
 %                             .azimuthDegGrid       Naz x Nel [deg]
 %                             .elevationDegGrid     Naz x Nel [deg]
@@ -423,11 +453,25 @@ function out = runR23AasEirpCdfGrid(varargin)
     % off the rest. This reshapes the CDF (correct for a "% of time"
     % exceedance criterion) and is NOT a flat dB power-reduction offset. p
     % is geometry-independent, so this applies to any aasGeometryPreset.
+    % activityModel selects the activity SOURCE (non-breaking; default
+    % 'legacy'). 'legacy' = the standalone p = tdd*load probability-of-
+    % transmission factor (byte-identical historical behaviour). 'frame' =
+    % the symbol-counted TS 38.214 frame budget (imtAasDlFrameTimeBudget),
+    % so this CDF view and the SSB time-weighted grid share ONE model: the
+    % on-fraction becomes alphaUe and the off-region radiates the always-on
+    % SSB sweep level instead of a scalar floor. activityOffFloorUses
+    % selects which sweep level the 'frame' off-region uses: 'timeAvg'
+    % (default, per-cell sweep time-average) or 'envelope' (per-cell sweep
+    % worst-case envelope).
     opts.activityWeightedCdf  = getOpt(opts, 'activityWeightedCdf', false);
+    opts.activityModel        = getOpt(opts, 'activityModel',        'legacy');
+    opts.activityOffFloorUses = getOpt(opts, 'activityOffFloorUses', 'timeAvg');
     opts.tddActivityFactor    = getOpt(opts, 'tddActivityFactor',    nestedParams.bs.tddActivityFactor);
     opts.networkLoadingFactor = getOpt(opts, 'networkLoadingFactor', nestedParams.bs.networkLoadingFactor);
     opts.activityOffFloorDbm  = getOpt(opts, 'activityOffFloorDbm',  -Inf);
     if opts.activityWeightedCdf
+        opts.activityModel        = validateActivityModel(opts.activityModel);
+        opts.activityOffFloorUses = validateActivityOffFloorUses(opts.activityOffFloorUses);
         validateActivityFactor(opts.tddActivityFactor,    'tddActivityFactor');
         validateActivityFactor(opts.networkLoadingFactor, 'networkLoadingFactor');
     end
@@ -691,39 +735,10 @@ function out = runR23AasEirpCdfGrid(varargin)
     pmaps = eirp_percentile_maps(stats, opts.percentiles);
     toc;
 
-    % ---- activity-weighted EIRP percentile maps (opt-in only) --------
-    % Statistical "% of time" activity model computed POST-HOC from the
-    % always-on histogram in `stats`. With p = tdd * load the unconditional
-    % CDF is  F(x) = (1-p) + p*F_on(x)  with a point mass (1-p) at "off".
-    % Solving F(x_q) = q maps the requested output percentile Pout to the
-    % always-on percentile  Pon = 100 - (100 - Pout)/p  (exact under the
-    % first-bin-where-cdf>=target lookup in eirp_percentile_maps). Requested
-    % percentiles in the off region (Pon < 0, i.e. Pout <= 100*(1-p)) take
-    % the off floor. p = 1 reproduces the raw percentileMaps exactly. This
-    % reuses the tested percentile engine on the SAME stats; no new RNG, no
-    % new percentile machinery, and stats / pmaps are never mutated.
-    if opts.activityWeightedCdf
-        p     = opts.tddActivityFactor * opts.networkLoadingFactor;   % active fraction in (0,1]
-        Pout  = opts.percentiles(:).';
-        Pon   = 100 - (100 - Pout) ./ p;
-        onMask = Pon >= 0;                                            % which requested pct are "on"
-        [NazAw, NelAw, ~] = size(pmaps.values);
-        awVals = repmat(opts.activityOffFloorDbm, NazAw, NelAw, numel(Pout)); % off-region default
-        if any(onMask)
-            onMaps = eirp_percentile_maps(stats, Pon(onMask));       % reuse tested engine
-            awVals(:, :, onMask) = onMaps.values;                    % NaN preserved for empty cells
-        end
-        awMaps = struct( ...
-            'percentiles', Pout, 'azGrid', stats.azGrid, 'elGrid', stats.elGrid, ...
-            'values', awVals, ...
-            'activeFraction', p, ...
-            'tddActivityFactor', opts.tddActivityFactor, 'networkLoadingFactor', opts.networkLoadingFactor, ...
-            'onPercentileEquivalent', Pon, 'inOnRegion', onMask, 'offFloorDbm', opts.activityOffFloorDbm, ...
-            'units', 'dBm/100MHz', ...
-            'note', ['Probability-of-transmission activity model (p = tdd*load); full peak EIRP a ' ...
-                     'fraction p of the time. Percentiles below 100*(1-p) fall in the off region. ' ...
-                     'NOT a time-average dB shift.']);
-    end
+    % NOTE: the activity-weighted EIRP percentile maps are computed LATER
+    % (after the optional SSB sweep) so that activityModel='frame' can read
+    % the always-on per-cell SSB sweep floor from out.ssb. See the
+    % "activity-weighted EIRP percentile maps" block near the end.
 
     % ---- gain percentile maps (only when requested) -----------------
     % Same generic percentile machinery; .values come out in dBi because
@@ -804,7 +819,13 @@ function out = runR23AasEirpCdfGrid(varargin)
         metadata.peakRealizedGainDbi = [];
     end
     % ---- activity-weighted CDF (additive; opt-in) ------------------
+    % activityActiveFraction is FINALISED in the activity block near the end
+    % (the 'frame' model resolves it from the symbol budget alphaUe). It is
+    % seeded here with the legacy p = tdd*load so the legacy path is
+    % byte-identical; the late block then overwrites out.metadata with the
+    % resolved value (a no-op for the legacy model).
     metadata.activityWeightedCdf   = logical(opts.activityWeightedCdf);
+    metadata.activityModel         = lower(char(opts.activityModel));
     if opts.activityWeightedCdf
         metadata.activityActiveFraction = opts.tddActivityFactor * opts.networkLoadingFactor;
         metadata.tddActivityFactor      = opts.tddActivityFactor;
@@ -915,12 +936,10 @@ function out = runR23AasEirpCdfGrid(varargin)
     % ---- activity-weighted percentile maps (always present; opt-in) -
     % Mirrors the disabled-placeholder pattern (pointing/gain): the field
     % is always populated with a predictable shape so consumers can probe
-    % it unconditionally. Empty ([]) unless opts.activityWeightedCdf.
-    if opts.activityWeightedCdf
-        out.activityWeightedPercentileMaps = awMaps;
-    else
-        out.activityWeightedPercentileMaps = [];
-    end
+    % it unconditionally. Seeded empty ([]) here and populated by the
+    % activity block AFTER the optional SSB sweep (so activityModel='frame'
+    % can read the per-cell sweep floor from out.ssb).
+    out.activityWeightedPercentileMaps = [];
     out.metadata       = metadata;
 
     % ---- optional SSB broadcast sweep + time-weighted EIRP ----------
@@ -937,6 +956,110 @@ function out = runR23AasEirpCdfGrid(varargin)
         out.metadata.ssbConfig        = ssbResult.config;
     else
         out.metadata.includesSsbSweep = false;
+    end
+
+    % ---- activity-weighted EIRP percentile maps (opt-in only) --------
+    % Statistical "% of time" activity CDF computed POST-HOC from the
+    % always-on histogram in `stats` (never mutated). The unconditional CDF
+    % is  F(x) = (1-p)*[off floor] + p*F_on(x)  with point mass (1-p) at the
+    % off floor, so the requested output percentile Pout maps to the
+    % always-on percentile  Pon = 100 - (100 - Pout)/p  (exact under the
+    % first-bin-where-cdf>=target lookup in eirp_percentile_maps), and
+    % requested percentiles in the off region (Pon < 0) take the off floor.
+    % This block runs AFTER the optional SSB sweep so the 'frame' model can
+    % source p and the per-cell sweep off floor from the SAME frame budget /
+    % out.ssb used by the time-weighted grid.
+    %   activityModel='legacy' (default): p = tdd*load, off floor = the
+    %       scalar opts.activityOffFloorDbm (byte-identical historical path).
+    %   activityModel='frame'           : p = alphaUe from the TS 38.214
+    %       frame budget, off floor = the per-cell always-on SSB sweep level.
+    if opts.activityWeightedCdf
+        activityModel = lower(char(opts.activityModel));
+        Pout          = opts.percentiles(:).';
+        [NazAw, NelAw, ~] = size(pmaps.values);
+        frameBudget   = [];
+
+        if strcmp(activityModel, 'frame')
+            % ONE model: the symbol-counted TS 38.214 frame budget. The
+            % on-fraction is the UE-class duty cycle alphaUe (NOT tdd*load).
+            sweepBeamCount = resolveSweepBeamCount(out, opts);
+            frameCfg       = resolveActivityFrameCfg(opts, double(opts.numUesPerSector), sweepBeamCount);
+            frameBudget    = imtAasDlFrameTimeBudget(frameCfg);
+            p              = frameBudget.alphaUe;
+            % Off-region floor = the always-on SSB sweep level per cell.
+            useEnvelope = strcmpi(char(opts.activityOffFloorUses), 'envelope');
+            if isfield(out, 'ssb') && isstruct(out.ssb)
+                if useEnvelope
+                    offFloor = out.ssb.envelope_dBm;
+                else
+                    offFloor = out.ssb.timeAvg_dBm;
+                end
+            else
+                offFloor = opts.activityOffFloorDbm;   % scalar fallback
+                warning('runR23AasEirpCdfGrid:activityFrameNoSweepFloor', ...
+                    ['activityModel=''frame'' with opts.ssb disabled: no per-cell ', ...
+                     'SSB sweep floor is available, so off-region percentiles fall ', ...
+                     'back to the scalar opts.activityOffFloorDbm (%g dBm). Enable ', ...
+                     'opts.ssb to radiate the always-on sweep level in the off region.'], ...
+                    opts.activityOffFloorDbm);
+            end
+        else
+            % Legacy probability-of-transmission factor.
+            p        = opts.tddActivityFactor * opts.networkLoadingFactor;
+            offFloor = opts.activityOffFloorDbm;       % scalar off floor
+            % Warn once when BOTH the activity CDF and the SSB sweep are on
+            % but the legacy p disagrees with the frame-budget alphaUe.
+            if isstruct(opts.ssb) && isfield(opts.ssb, 'enable') && opts.ssb.enable
+                sweepBeamCount = resolveSweepBeamCount(out, opts);
+                cmpCfg = resolveActivityFrameCfg(opts, double(opts.numUesPerSector), sweepBeamCount);
+                cmpBud = imtAasDlFrameTimeBudget(cmpCfg);
+                cons   = imtAasActivityFrameConsistency(cmpBud, p);
+                if ~cons.consistent
+                    warning('runR23AasEirpCdfGrid:activityModelMismatch', ...
+                        ['activityModel=''legacy'': the activity-weighted CDF ', ...
+                         'on-fraction p = tdd*load = %.4f disagrees with the ', ...
+                         'frame-budget alphaUe = %.4f (delta %.4f). This CDF and the ', ...
+                         'SSB time-weighted grid are then sourced from DIFFERENT ', ...
+                         'activity factors. Set activityModel=''frame'' to reconcile ', ...
+                         'both onto imtAasDlFrameTimeBudget.'], ...
+                        p, cmpBud.alphaUe, cons.deltaAlphaUe);
+                end
+            end
+        end
+
+        Pon    = 100 - (100 - Pout) ./ p;
+        onMask = Pon >= 0;                              % which requested pct are "on"
+        if isscalar(offFloor)
+            awVals = repmat(offFloor, NazAw, NelAw, numel(Pout));
+        else
+            % Per-cell off floor (Naz x Nel) broadcast across percentiles.
+            awVals = repmat(offFloor, 1, 1, numel(Pout));
+        end
+        if any(onMask)
+            onMaps = eirp_percentile_maps(stats, Pon(onMask));   % reuse tested engine
+            awVals(:, :, onMask) = onMaps.values;                % NaN preserved for empty cells
+        end
+
+        awMaps = struct( ...
+            'percentiles', Pout, 'azGrid', stats.azGrid, 'elGrid', stats.elGrid, ...
+            'values', awVals, ...
+            'activeFraction', p, ...
+            'activityModel', activityModel, ...
+            'tddActivityFactor', opts.tddActivityFactor, 'networkLoadingFactor', opts.networkLoadingFactor, ...
+            'onPercentileEquivalent', Pon, 'inOnRegion', onMask, 'offFloorDbm', offFloor, ...
+            'offFloorUses', lower(char(opts.activityOffFloorUses)), ...
+            'units', 'dBm/100MHz', ...
+            'note', activityModelNote(activityModel));
+        if ~isempty(frameBudget)
+            awMaps.frameBudget = frameBudget;
+        end
+        out.activityWeightedPercentileMaps = awMaps;
+
+        % Finalise the activeFraction in metadata (no-op for the legacy
+        % model, where it already equals tdd*load).
+        out.metadata.activityActiveFraction = p;
+        out.metadata.tddActivityFactor      = opts.tddActivityFactor;
+        out.metadata.networkLoadingFactor   = opts.networkLoadingFactor;
     end
 
     % ---- optional per-RE EPRE-offset envelope (non-breaking) --------
@@ -1289,6 +1412,116 @@ function validateActivityFactor(v, name)
     if ~(isnumeric(v) && isscalar(v) && isfinite(v) && v > 0 && v <= 1)
         error('runR23AasEirpCdfGrid:badActivityFactor', ...
             '%s must be a finite scalar in (0, 1] when activityWeightedCdf is true.', name);
+    end
+end
+
+function m = validateActivityModel(m)
+%VALIDATEACTIVITYMODEL Read + validate opts.activityModel.
+%   Default 'legacy' (resolved upstream). Allowed (case-insensitive):
+%   'legacy' (standalone p = tdd*load) and 'frame' (TS 38.214 frame budget
+%   alphaUe + per-cell SSB sweep off floor). Errors with id
+%   'runR23AasEirpCdfGrid:invalidActivityModel'.
+    if isstring(m) && isscalar(m)
+        m = char(m);
+    end
+    if ~ischar(m)
+        error('runR23AasEirpCdfGrid:invalidActivityModel', ...
+            'opts.activityModel must be a char/string scalar (''legacy'' or ''frame'').');
+    end
+    m = lower(m);
+    switch m
+        case {'legacy', 'frame'}
+            % ok
+        otherwise
+            error('runR23AasEirpCdfGrid:invalidActivityModel', ...
+                'opts.activityModel must be ''legacy'' or ''frame'' (got ''%s'').', m);
+    end
+end
+
+function u = validateActivityOffFloorUses(u)
+%VALIDATEACTIVITYOFFFLOORUSES Read + validate opts.activityOffFloorUses.
+%   Default 'timeAvg'. Allowed (case-insensitive): 'timeAvg' (per-cell SSB
+%   sweep time-average) and 'envelope' (per-cell SSB sweep worst-case
+%   envelope). Only consulted by the 'frame' activity model. Errors with id
+%   'runR23AasEirpCdfGrid:invalidActivityOffFloorUses'.
+    if isstring(u) && isscalar(u)
+        u = char(u);
+    end
+    if ~ischar(u)
+        error('runR23AasEirpCdfGrid:invalidActivityOffFloorUses', ...
+            'opts.activityOffFloorUses must be a char/string scalar (''timeAvg'' or ''envelope'').');
+    end
+    if strcmpi(u, 'timeavg')
+        u = 'timeAvg';
+    elseif strcmpi(u, 'envelope')
+        u = 'envelope';
+    else
+        error('runR23AasEirpCdfGrid:invalidActivityOffFloorUses', ...
+            'opts.activityOffFloorUses must be ''timeAvg'' or ''envelope'' (got ''%s'').', u);
+    end
+end
+
+function n = resolveSweepBeamCount(out, opts)
+%RESOLVESWEEPBEAMCOUNT Sweep beam count for the frame budget ssb.L default.
+%   Prefers the realised out.ssb.numBeams (when the SSB sweep ran);
+%   otherwise mirrors the imtAasSsbOption defaults (coarseConf [3 3 2] -> 8,
+%   or an explicit azPointsDeg list) so the frame budget matches the sweep
+%   that imtAasSsbOption would build.
+    n = 8;   % sum([3 3 2]) -- imtAasSsbOption default coarseConf
+    if isfield(out, 'ssb') && isstruct(out.ssb) && isfield(out.ssb, 'numBeams') && ...
+            ~isempty(out.ssb.numBeams)
+        n = double(out.ssb.numBeams);
+        return;
+    end
+    if isstruct(opts.ssb)
+        if isfield(opts.ssb, 'coarseConf') && ~isempty(opts.ssb.coarseConf)
+            n = sum(double(opts.ssb.coarseConf(:)));
+        elseif isfield(opts.ssb, 'azPointsDeg') && ~isempty(opts.ssb.azPointsDeg)
+            n = numel(opts.ssb.azPointsDeg);
+        end
+    end
+end
+
+function frameCfg = resolveActivityFrameCfg(opts, numUes, sweepBeamCount)
+%RESOLVEACTIVITYFRAMECFG Build the imtAasDlFrameTimeBudget cfg for the
+%   'frame' activity model. Uses opts.ssb.timeBudget.frame when present
+%   (so the CDF view, the SSB time-weighted grid, and this share the SAME
+%   frame); otherwise a default frame. The sweep beam count and per-UE
+%   count default into the frame cfg using the SAME defaults
+%   imtAasTimeWeightedGrid applies (frame.ssb.L <- sweep beam count,
+%   frame.csirsUe.numUes <- numUesPerSector).
+    frameCfg = struct();
+    if isstruct(opts.ssb) && isfield(opts.ssb, 'timeBudget') && ...
+            isstruct(opts.ssb.timeBudget) && isfield(opts.ssb.timeBudget, 'frame') && ...
+            isstruct(opts.ssb.timeBudget.frame)
+        frameCfg = opts.ssb.timeBudget.frame;
+    end
+    if ~isfield(frameCfg, 'ssb') || ~isstruct(frameCfg.ssb)
+        frameCfg.ssb = struct();
+    end
+    if ~isfield(frameCfg.ssb, 'L') || isempty(frameCfg.ssb.L)
+        frameCfg.ssb.L = sweepBeamCount;
+    end
+    if ~isfield(frameCfg, 'csirsUe') || ~isstruct(frameCfg.csirsUe)
+        frameCfg.csirsUe = struct();
+    end
+    if ~isfield(frameCfg.csirsUe, 'numUes') || isempty(frameCfg.csirsUe.numUes)
+        frameCfg.csirsUe.numUes = numUes;
+    end
+end
+
+function s = activityModelNote(model)
+%ACTIVITYMODELNOTE Human-readable note describing the activity CDF model.
+    if strcmp(model, 'frame')
+        s = ['Frame-budget activity model: p = alphaUe from ', ...
+             'imtAasDlFrameTimeBudget (TS 38.214 symbol counting). The ', ...
+             'off region radiates the always-on per-cell SSB sweep floor, ', ...
+             'so F(x) = (1-p)*sweepFloor + p*F_on(traffic), consistent with ', ...
+             'timeWeighted.avg_dBm. NOT a flat dB shift.'];
+    else
+        s = ['Probability-of-transmission activity model (p = tdd*load); ', ...
+             'full peak EIRP a fraction p of the time. Percentiles below ', ...
+             '100*(1-p) fall in the off region. NOT a time-average dB shift.'];
     end
 end
 
