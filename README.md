@@ -1180,6 +1180,71 @@ V19.2.0: `scs_kHz` (30), `loadFactor` (0.20), `tdd`
 `prs`, and `pdsch` (`.mappingType` / `.L`, validated against Table
 5.1.2.1-1). See `imtAasDlFrameTimeBudget` for the per-term derivation.
 
+### Time / activity model — one source of truth
+
+There is **ONE** activity model: the symbol-counted DL frame budget
+(`imtAasDlFrameTimeBudget`, 3GPP TS 38.214). Every time/activity output
+is a view of that one budget. The standalone `tddActivityFactor` /
+`networkLoadingFactor` knobs are **legacy** — kept for back-compat, but
+they are *not* derived from the frame budget and can disagree with it.
+
+Two distinct questions, two distinct outputs, **one** budget behind both:
+
+| question | output | how |
+| -------- | ------ | --- |
+| What is the long-term / I-N **time-average** EIRP per direction? | `out.timeWeighted.avg_dBm` | `alphaSweep*S + alphaUe*T` (linear), duty-cycle weighted |
+| What is the absolute **worst case** per direction? | `out.timeWeighted.peak_dBm` | `max(stats.max_dBm, ssb.envelope_dBm)` (envelope, not a power sum) |
+| What EIRP is exceeded **X % of the time**? | `out.activityWeightedPercentileMaps` | CDF view: on-fraction `p`, off-region = the always-on sweep floor |
+
+The **"% of time exceeded" CDF** (`out.activityWeightedPercentileMaps`,
+opt-in via `opts.activityWeightedCdf`) is the CDF view of the *same*
+model. Its unconditional CDF is
+
+```
+F(x) = (1 - p) * [off floor] + p * F_on(traffic)
+```
+
+`opts.activityModel` selects where `p` and the off floor come from:
+
+| `opts.activityModel` | on-fraction `p` | off-region floor |
+| -------------------- | --------------- | ---------------- |
+| `'legacy'` (default) | `tddActivityFactor * networkLoadingFactor` | scalar `opts.activityOffFloorDbm` (default `-Inf`) |
+| `'frame'`            | `alphaUe` from `imtAasDlFrameTimeBudget` | the **always-on per-cell SSB sweep level** |
+
+Under `'frame'` the off region radiates the always-on sweep instead of
+"nothing", so the CDF is consistent with `timeWeighted.avg_dBm` (the
+sweep is physically always on). `opts.activityOffFloorUses` picks the
+sweep level used: `'timeAvg'` (default, `out.ssb.timeAvg_dBm`) or
+`'envelope'` (`out.ssb.envelope_dBm`). The frame is
+`opts.ssb.timeBudget.frame` when present, else a default frame with
+`frame.ssb.L` = the sweep beam count and `frame.csirsUe.numUes` =
+`numUesPerSector` — the **same** defaults `imtAasTimeWeightedGrid` uses,
+so `p` matches the grid's `alphaUe`. With `opts.ssb` disabled the default
+frame budget is still built for `p`, but the off floor falls back to the
+scalar `opts.activityOffFloorDbm` (with a warning that no sweep floor is
+available).
+
+```matlab
+opts.activityWeightedCdf  = true;
+opts.activityModel        = 'frame';     % p = alphaUe, sweep off floor
+opts.ssb                  = struct();    % always-on sweep -> per-cell floor
+result = runR23AasEirpCdfGrid(opts);
+result.activityWeightedPercentileMaps.activeFraction   % == out.timeWeighted.alphaUe
+```
+
+**Consistency guard.** With the default `'legacy'` model, if both the
+activity-weighted CDF *and* the SSB sweep are enabled and the legacy
+`p = tdd*load` disagrees with the frame-budget `alphaUe` (e.g. the
+defaults `0.15` vs `~0.1407`), `runR23AasEirpCdfGrid` warns once
+(`runR23AasEirpCdfGrid:activityModelMismatch`) and points you at
+`activityModel='frame'`. The check is the pure helper
+`imtAasActivityFrameConsistency(budget, pLegacy)`
+(`.deltaAlphaUe`, `.consistent`).
+
+> The standalone `tddActivityFactor` / `networkLoadingFactor` factors are
+> **legacy**. Prefer `activityModel='frame'` so the "% of time" CDF and
+> the time-weighted I-N grid are sourced from the one TS 38.214 budget.
+
 ### Files added in this slice
 
 | file | role |
@@ -1195,6 +1260,9 @@ V19.2.0: `scs_kHz` (30), `loadFactor` (0.20), `tdd`
 | `matlab/test_imtAasTimeWeightedGrid.m` | time-weighted combine self tests |
 | `matlab/test_imtAasSsbOption.m`        | SSB sweep builder self tests |
 | `matlab/test_runR23AasEirpCdfGrid_ssb.m` | `opts.ssb` integration / default-off invariant tests |
+| `matlab/imtAasActivityFrameConsistency.m` | pure legacy-`p` vs frame-`alphaUe` consistency check |
+| `matlab/test_activity_weighted_cdf.m`  | `opts.activityWeightedCdf` legacy + `'frame'` integration tests |
+| `matlab/test_activity_frame_consistency.m` | frame-vs-legacy consistency + mismatch-warning tests |
 
 ### Scope (what this slice is NOT)
 

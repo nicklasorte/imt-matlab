@@ -159,6 +159,79 @@ function results = test_activity_weighted_cdf()
     results = check(results, ok6, ...
         'T6: tdd=0, load=1.5, tdd=-0.1 all throw runR23AasEirpCdfGrid:badActivityFactor');
 
+    % ---- T7: activityModel='legacy' == omitting it (regression) -----
+    % aw1 above used the default (omitted) activityModel with tdd=0.75,
+    % load=0.25. An explicit activityModel='legacy' at the same factors
+    % must reproduce the activity-weighted values byte-for-byte.
+    legExplicit = awOpts1;
+    legExplicit.activityModel = 'legacy';
+    rLeg = runR23AasEirpCdfGrid(legExplicit);
+    ok7 = isequaln(rLeg.activityWeightedPercentileMaps.values, ...
+                   aw1.activityWeightedPercentileMaps.values) && ...
+          strcmp(rLeg.activityWeightedPercentileMaps.activityModel, 'legacy') && ...
+          abs(rLeg.activityWeightedPercentileMaps.activeFraction - 0.75*0.25) < 1e-12;
+    results = check(results, ok7, ...
+        'T7: activityModel=''legacy'' byte-identical to omitting it (regression)');
+
+    % ---- T8: activityModel='frame' with SSB -> alphaUe + sweep floor -
+    fOpts = baseOpts;
+    fOpts.activityWeightedCdf = true;
+    fOpts.activityModel       = 'frame';
+    fOpts.ssb                 = struct();         % enable the always-on sweep
+    rf  = runR23AasEirpCdfGrid(fOpts);
+    AWf = rf.activityWeightedPercentileMaps;
+
+    % p must equal the frame-budget alphaUe sourced from the SAME defaults:
+    % frame.ssb.L <- realised sweep beam count, csirsUe.numUes <- numBeams.
+    expBud = imtAasDlFrameTimeBudget(struct( ...
+        'ssb',     struct('L', rf.ssb.numBeams), ...
+        'csirsUe', struct('numUes', fOpts.numBeams)));
+    okPf = abs(AWf.activeFraction - expBud.alphaUe) < 1e-12 && ...
+           strcmp(AWf.activityModel, 'frame');
+
+    offMaskF = ~AWf.inOnRegion;
+    okHasOff = any(offMaskF);                      % [5 50] fall in the off region
+    okFloor  = okHasOff;
+    offIdx   = find(offMaskF);
+    for kk = 1:numel(offIdx)
+        okFloor = okFloor && isequaln(AWf.values(:, :, offIdx(kk)), rf.ssb.timeAvg_dBm);
+    end
+    % The off region radiates the (finite) sweep level, NOT -Inf.
+    okNotInf = all(isfinite(rf.ssb.timeAvg_dBm(:))) && ...
+               ~any(isinf(AWf.values(:, :, offMaskF)), 'all');
+    % On-region remap still exact against the tested engine on the SAME stats.
+    onMaskF = AWf.inOnRegion;
+    expOnF  = eirp_percentile_maps(rf.stats, AWf.onPercentileEquivalent(onMaskF));
+    okOnF   = isequaln(AWf.values(:, :, onMaskF), expOnF.values);
+    ok8 = okPf && okFloor && okNotInf && okOnF;
+    results = check(results, ok8, sprintf( ...
+        ['T8: frame model p=alphaUe=%.4f; off-region == out.ssb.timeAvg_dBm (not -Inf) ', ...
+         '(p=%d floor=%d notInf=%d on=%d)'], AWf.activeFraction, okPf, okFloor, okNotInf, okOnF));
+
+    % ---- T9: activityModel='frame' with SSB disabled -> warn + fallback
+    gOpts = baseOpts;
+    gOpts.activityWeightedCdf = true;
+    gOpts.activityModel       = 'frame';          % no opts.ssb -> no sweep floor
+    okWarn = warnsId(@() runR23AasEirpCdfGrid(gOpts), ...
+        'runR23AasEirpCdfGrid:activityFrameNoSweepFloor');
+
+    wprev = warning('off', 'runR23AasEirpCdfGrid:activityFrameNoSweepFloor');
+    rg = runR23AasEirpCdfGrid(gOpts);
+    warning(wprev);
+    AWg = rg.activityWeightedPercentileMaps;
+    % Default frame budget still built (L defaults to the 8-beam sweep count).
+    expBudG = imtAasDlFrameTimeBudget(struct( ...
+        'ssb',     struct('L', 8), ...
+        'csirsUe', struct('numUes', gOpts.numBeams)));
+    okPg   = abs(AWg.activeFraction - expBudG.alphaUe) < 1e-12;
+    okFall = all(isinf(AWg.values(:, :, ~AWg.inOnRegion)), 'all') && ...
+             all(AWg.values(:, :, ~AWg.inOnRegion) < 0, 'all');
+    ok9 = okWarn && okPg && okFall;
+    results = check(results, ok9, sprintf( ...
+        ['T9: frame model + no SSB -> activityFrameNoSweepFloor warning, ', ...
+         'p=alphaUe=%.4f, scalar -Inf off floor (warn=%d p=%d fall=%d)'], ...
+        AWg.activeFraction, okWarn, okPg, okFall));
+
     fprintf('\n--- test_activity_weighted_cdf summary ---\n');
     for k = 1:numel(results.summary)
         fprintf('  %s\n', results.summary{k});
@@ -179,6 +252,20 @@ end
 function tf = throwsId(fn, id)
 %THROWSID True when FN throws an MException with identifier ID.
     tf = false;
+    try
+        fn();
+    catch err
+        tf = strcmp(err.identifier, id);
+    end
+end
+
+function tf = warnsId(fn, id)
+%WARNSID True when FN raises the warning with identifier ID. The warning is
+%   temporarily promoted to an error so detection is robust to any later
+%   warnings overwriting lastwarn.
+    tf = false;
+    s = warning('error', id); %#ok<CTPCT>
+    c = onCleanup(@() warning(s));
     try
         fn();
     catch err
