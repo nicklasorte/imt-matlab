@@ -110,6 +110,35 @@ function out = runR23AasEirpCdfGrid(varargin)
 %           out.gainPercentileMaps and out.metadata.outputDomain /
 %           .computeGain / .gainAggregation / .peakRealizedGainDbi.
 %
+%   Per-RE EPRE-offset layer (non-breaking; default OFF):
+%       opts.epre absent / [] -> disabled, and stats / percentileMaps /
+%           selfCheck (and any opts.ssb out.ssb / out.timeWeighted) are
+%           byte-identical to today for a fixed seed.
+%       opts.epre = struct(...) -> enables the 3GPP TS 38.214 V19.2.0
+%           Clause 4.1 downlink per-resource-element EPRE-offset layer:
+%           DM-RS power boost (Table 4.1-1), optional PT-RS power boost
+%           (Tables 4.1-2 / 4.1-2A), and the CSI-RS-vs-SSB power offset
+%           powerControlOffsetSS. Fields (resolved + validated by
+%           imtAasEpreOffsets):
+%             .dmrsConfigType        1 | 2          (default 1)
+%             .dmrsCdmGroupsNoData   1 | 2 | 3       (default 2)
+%             .includePtrs           logical        (default false)
+%             .dmrsTypeEnh           logical        (default false)
+%             .pdschLayers           1..8           (default 1, PT-RS only)
+%             .epreRatioState        0 | 1          (default 0, PT-RS only)
+%             .csirsPowerOffsetSsDb  scalar dB      (default 0)
+%       The ITU band-integrated baseline (78.3 dBm/100 MHz sector EIRP)
+%       is and remains the baseline: DM-RS / PT-RS boosts are POWER-
+%       CONSERVING over a slot and over the channel bandwidth, so they
+%       are NOT added to stats / percentileMaps / the band-integrated CDF
+%       and are NOT fed into the band-integrated sector-peak self-check.
+%       Instead a SEPARATE per-RE worst-case EIRP DENSITY envelope is
+%       surfaced (out.epre.perRePeakEnvelope_dBm = stats.max_dBm +
+%       hottestBoostDb). That envelope is ALLOWED to exceed the 78.3 dBm
+%       band-integrated sector peak by design (a hotter density on a
+%       boosted RE) and is not clamped to it. See imtAasEpreOffsets and
+%       imtAasApplyEpreEnvelope.
+%
 %   Power semantics (R23 macro 7.125-8.4 GHz):
 %       maxEirpPerSector_dBm = 78.3   sector peak EIRP [dBm / 100 MHz]
 %       conductedPower_dBm   = 46.1   conducted BS power [dBm / 100 MHz]
@@ -173,6 +202,23 @@ function out = runR23AasEirpCdfGrid(varargin)
 %                                                    exceeding sector peak,
 %                                                    SOFT WARN on coarse-
 %                                                    grid undershoot).
+%       .epre               per-RE EPRE-offset layer (TS 38.214 Clause
+%                           4.1) when opts.epre is enabled, else []:
+%                             .dmrsBoostDb / .ptrsBoostDb / .csirsOffsetDb
+%                             .hottestBoostDb = max(dmrsBoostDb, ptrsBoostDb)
+%                             .perRePeakEnvelope_dBm  Naz x Nel per-RE
+%                                 worst-case EIRP density [dBm] =
+%                                 stats.max_dBm + hottestBoostDb (a
+%                                 SEPARATE quantity from the band-integrated
+%                                 maps; may exceed the 78.3 dBm sector peak)
+%                             .perRePeakPercentileMaps  percentile maps of
+%                                 the shifted envelope (baseline histogram
+%                                 never mutated)
+%                             .csirsClassEnvelope_dBm  CSI-RS-class envelope
+%                                 (sweep envelope + csirsOffsetDb) or []
+%                             .notes / .specReference
+%                           out.metadata.includesEpre / .epreConfig record
+%                           whether the layer ran and the resolved config.
 %       .percentileTable    optional table from
 %                           export_eirp_percentile_table when
 %                           opts.outputCsvPath is provided.
@@ -311,6 +357,18 @@ function out = runR23AasEirpCdfGrid(varargin)
     % NEW output fields (out.ssb / out.timeWeighted) AFTER the streaming
     % aggregator and power self-check are finalised, so neither is touched.
     opts.ssb = resolveSsbOpts(getOpt(opts, 'ssb', []));
+
+    % ---- per-RE EPRE-offset option (non-breaking; default OFF) -------
+    % opts.epre absent / [] -> disabled, and every existing output
+    % (stats, percentileMaps, the power self-check, and the opts.ssb
+    % time-weighted outputs) stays byte-identical for a fixed seed. A
+    % struct enables the TS 38.214 Clause 4.1 per-RE EPRE-offset layer,
+    % attached to NEW output fields (out.epre) AFTER the streaming
+    % aggregator, the power self-check, and the SSB sweep are finalised.
+    % The ITU band-integrated baseline (78.3 dBm/100 MHz) is preserved:
+    % the EPRE layer only adds a SEPARATE per-RE worst-case density
+    % envelope and never mutates the band-integrated path.
+    opts.epre = resolveEpreOpts(getOpt(opts, 'epre', []));
 
     % ---- propagate maxEirpPerSector override into params ------------
     if isnumeric(opts.maxEirpPerSector_dBm) && isscalar(opts.maxEirpPerSector_dBm) ...
@@ -767,6 +825,44 @@ function out = runR23AasEirpCdfGrid(varargin)
         out.metadata.includesSsbSweep = false;
     end
 
+    % ---- optional per-RE EPRE-offset envelope (non-breaking) --------
+    % Runs AFTER the streaming aggregator, the power self-check, and the
+    % SSB sweep, on NEW output fields only. opts.epre never mutates stats /
+    % percentileMaps / selfCheck / out.ssb / out.timeWeighted: the band-
+    % integrated ITU baseline (78.3 dBm/100 MHz) is preserved exactly. The
+    % EPRE layer surfaces only the SEPARATE per-RE worst-case density
+    % envelope (perRePeakEnvelope_dBm = stats.max_dBm + hottestBoostDb),
+    % which is ALLOWED to exceed the band-integrated sector peak by design
+    % and is deliberately EXCLUDED from the band-integrated self-check.
+    if isstruct(opts.epre) && isfield(opts.epre, 'enable') && opts.epre.enable
+        epreOffsets = imtAasEpreOffsets(opts.epre);
+        epreApplyOpts = struct('percentiles', opts.percentiles);
+        if isfield(out, 'ssb') && isstruct(out.ssb) && ...
+                isfield(out.ssb, 'envelope_dBm') && ~isempty(out.ssb.envelope_dBm)
+            % CSI-RS-class offset rides the sweep-class envelope only.
+            epreApplyOpts.sweepEnvelope_dBm = out.ssb.envelope_dBm;
+        end
+        epreResult = imtAasApplyEpreEnvelope(stats, epreOffsets, epreApplyOpts);
+
+        epre = struct();
+        epre.dmrsBoostDb             = epreResult.dmrsBoostDb;
+        epre.ptrsBoostDb             = epreResult.ptrsBoostDb;
+        epre.csirsOffsetDb           = epreResult.csirsOffsetDb;
+        epre.hottestBoostDb          = epreResult.hottestBoostDb;
+        epre.perRePeakEnvelope_dBm   = epreResult.perRePeakEnvelope_dBm;
+        epre.perRePeakPercentileMaps = epreResult.perRePeakPercentileMaps;
+        epre.csirsClassEnvelope_dBm  = epreResult.csirsClassEnvelope_dBm;
+        epre.notes                   = epreResult.notes;
+        epre.specReference           = epreResult.specReference;
+        out.epre = epre;
+
+        out.metadata.includesEpre = true;
+        out.metadata.epreConfig   = epreOffsets.config;
+    else
+        out.epre = [];
+        out.metadata.includesEpre = false;
+    end
+
     % ---- optional CSV export ----------------------------------------
     if ~isempty(opts.outputCsvPath)
         out.percentileTable = export_eirp_percentile_table( ...
@@ -1146,6 +1242,24 @@ function ssb = resolveSsbOpts(raw)
     ssb = raw;
     if ~isfield(ssb, 'enable') || isempty(ssb.enable); ssb.enable = true; end
     ssb.enable = logical(ssb.enable);
+end
+
+function epre = resolveEpreOpts(raw)
+%RESOLVEEPREOPTS Read + normalize the optional opts.epre struct.
+%   [] / absent -> struct('enable', false) (the per-RE EPRE layer is OFF
+%   and every existing output is byte-identical). A struct presence enables
+%   the layer; opts.epre.enable defaults to true when the struct is
+%   supplied. The TS 38.214 Clause 4.1 field validation itself is performed
+%   downstream by imtAasEpreOffsets.
+    epre = struct('enable', false);
+    if isempty(raw); return; end
+    if ~isstruct(raw)
+        error('runR23AasEirpCdfGrid:badEpreOpts', ...
+            'opts.epre must be a struct (or empty).');
+    end
+    epre = raw;
+    if ~isfield(epre, 'enable') || isempty(epre.enable); epre.enable = true; end
+    epre.enable = logical(epre.enable);
 end
 
 function frame = resolveOutputFrame(opts)
