@@ -21,6 +21,33 @@ function results = test_runR23AasEirpCdfGrid()
 %            other geometry override fields) and reaches identical
 %            internal state to the equivalent name-value invocation.
 %
+%   Black-box coverage of the untested LOCAL (file-private) helpers of
+%   runR23AasEirpCdfGrid, exercised only through the public entry point by
+%   forcing the relevant branch and asserting on the observable result:
+%       T12. validateNumMc: numMc = 0 and numMc = 2.5 both throw
+%            'runR23AasEirpCdfGrid:badNumMc'.
+%       T13. validateNumUes: numUesPerSector = 0 and 2.5 both throw
+%            'runR23AasEirpCdfGrid:badNumUesPerSector'.
+%       T14. validateOutputDomain: outputDomain = 'bogus' throws
+%            'runR23AasEirpCdfGrid:invalidOutputDomain'; the default run
+%            (no outputDomain) reports metadata.outputDomain == 'eirp'.
+%       T15. writeMetadataSidecar: opts.outputMetadataPath writes a non-
+%            empty JSON sidecar whose jsondecode is a struct with
+%            .generator == 'runR23AasEirpCdfGrid'.
+%       T16. resolveInputs: a non-struct, non-name-value first argument
+%            (42) throws 'runR23AasEirpCdfGrid:badArgs'.
+%       T17. extractGeometryNameValues: a non-char aasGeometryPreset (123)
+%            throws 'runR23AasEirpCdfGrid:badGeometryPreset'.
+%       T18. resolveSsbOpts: opts.ssb = 5 (non-struct, non-empty) throws
+%            'runR23AasEirpCdfGrid:badSsbOpts'.
+%       T19. environmentToDeployment: environment 'suburban' maps to
+%            metadata.deployment 'macroSuburban' and 'urban' to 'macroUrban'.
+%       T20. badMaxEirp: maxEirpPerSector_dBm = NaN throws
+%            'runR23AasEirpCdfGrid:badMaxEirp'.
+%       T21. numBeams/numUesPerSector conflict: both supplied and unequal
+%            fires 'runR23AasEirpCdfGrid:numBeamsConflict' and
+%            numUesPerSector wins (out.stats.numBeams == 3).
+%
 %   Returns struct with .passed (logical) and .summary (cellstr).
 
     results.summary = {};
@@ -37,6 +64,16 @@ function results = test_runR23AasEirpCdfGrid()
     results = t_no_path_loss_fields(results);
     results = t_seed_repeatable(results);
     results = t_flat_opts_geometry_preset(results);
+    results = t_validate_num_mc(results);
+    results = t_validate_num_ues(results);
+    results = t_validate_output_domain(results);
+    results = t_write_metadata_sidecar(results);
+    results = t_resolve_inputs_bad_first_arg(results);
+    results = t_bad_geometry_preset(results);
+    results = t_resolve_ssb_opts(results);
+    results = t_environment_to_deployment(results);
+    results = t_bad_max_eirp(results);
+    results = t_num_beams_conflict(results);
 
     fprintf('\n--- test_runR23AasEirpCdfGrid summary ---\n');
     for k = 1:numel(results.summary)
@@ -285,8 +322,203 @@ function r = t_flat_opts_geometry_preset(r)
 end
 
 % =====================================================================
+% T12: validateNumMc rejects non-positive / non-integer numMc.
+% =====================================================================
+function r = t_validate_num_mc(r)
+    okZero = throwsId(@() runR23AasEirpCdfGrid(setfield(smallOpts(), ...
+        'numMc', 0)), 'runR23AasEirpCdfGrid:badNumMc');             %#ok<SFLD>
+    okFrac = throwsId(@() runR23AasEirpCdfGrid(setfield(smallOpts(), ...
+        'numMc', 2.5)), 'runR23AasEirpCdfGrid:badNumMc');           %#ok<SFLD>
+    r = check(r, okZero && okFrac, sprintf( ...
+        ['T12: validateNumMc rejects numMc=0 and numMc=2.5 with ' ...
+         'badNumMc (zero=%d frac=%d)'], okZero, okFrac));
+end
+
+% =====================================================================
+% T13: validateNumUes rejects non-positive / non-integer numUesPerSector.
+% =====================================================================
+function r = t_validate_num_ues(r)
+    okZero = throwsId(@() runR23AasEirpCdfGrid(setfield(smallOpts(), ...
+        'numUesPerSector', 0)), ...
+        'runR23AasEirpCdfGrid:badNumUesPerSector');                 %#ok<SFLD>
+    okFrac = throwsId(@() runR23AasEirpCdfGrid(setfield(smallOpts(), ...
+        'numUesPerSector', 2.5)), ...
+        'runR23AasEirpCdfGrid:badNumUesPerSector');                 %#ok<SFLD>
+    r = check(r, okZero && okFrac, sprintf( ...
+        ['T13: validateNumUes rejects numUesPerSector=0 and 2.5 with ' ...
+         'badNumUesPerSector (zero=%d frac=%d)'], okZero, okFrac));
+end
+
+% =====================================================================
+% T14: validateOutputDomain rejects bad domain; default reports 'eirp'.
+% =====================================================================
+function r = t_validate_output_domain(r)
+    okBad = throwsId(@() runR23AasEirpCdfGrid(setfield(smallOpts(), ...
+        'outputDomain', 'bogus')), ...
+        'runR23AasEirpCdfGrid:invalidOutputDomain');                %#ok<SFLD>
+    out = runSmall(struct('seed', 1));   % no outputDomain -> default
+    okDefault = strcmp(out.metadata.outputDomain, 'eirp');
+    r = check(r, okBad && okDefault, sprintf( ...
+        ['T14: validateOutputDomain rejects ''bogus'' (bad=%d) and the ' ...
+         'default run reports metadata.outputDomain=''eirp'' (default=%d)'], ...
+        okBad, okDefault));
+end
+
+% =====================================================================
+% T15: writeMetadataSidecar writes a decodable JSON sidecar.
+% =====================================================================
+function r = t_write_metadata_sidecar(r)
+    sidecarPath = [tempname '.json'];
+    cleanup = onCleanup(@() deleteIfExists(sidecarPath)); %#ok<NASGU>
+
+    opts = smallOpts();
+    opts.outputMetadataPath = sidecarPath;
+    runR23AasEirpCdfGrid(opts);
+
+    okExists = exist(sidecarPath, 'file') == 2;
+    okNonEmpty = false;
+    okStruct = false;
+    okGen = false;
+    if okExists
+        txt = fileread(sidecarPath);
+        okNonEmpty = ~isempty(strtrim(txt));
+        if okNonEmpty
+            decoded = jsondecode(txt);
+            okStruct = isstruct(decoded);
+            okGen = okStruct && isfield(decoded, 'generator') && ...
+                    strcmp(decoded.generator, 'runR23AasEirpCdfGrid');
+        end
+    end
+    r = check(r, okExists && okNonEmpty && okStruct && okGen, sprintf( ...
+        ['T15: writeMetadataSidecar writes a non-empty JSON sidecar with ' ...
+         'generator==runR23AasEirpCdfGrid (exists=%d nonEmpty=%d ' ...
+         'struct=%d gen=%d)'], okExists, okNonEmpty, okStruct, okGen));
+end
+
+% =====================================================================
+% T16: resolveInputs rejects a bad first argument.
+% =====================================================================
+function r = t_resolve_inputs_bad_first_arg(r)
+    okBad = throwsId(@() runR23AasEirpCdfGrid(42), ...
+        'runR23AasEirpCdfGrid:badArgs');
+    r = check(r, okBad, ...
+        'T16: resolveInputs(42) throws runR23AasEirpCdfGrid:badArgs');
+end
+
+% =====================================================================
+% T17: extractGeometryNameValues rejects a non-char aasGeometryPreset.
+% =====================================================================
+function r = t_bad_geometry_preset(r)
+    okBad = throwsId(@() runR23AasEirpCdfGrid( ...
+        'aasGeometryPreset', 123, ...
+        'numMc', 2, ...
+        'azGridDeg', -10:10:10, ...
+        'elGridDeg', -10:5:0, ...
+        'binEdgesDbm', -80:5:120, ...
+        'seed', 1), 'runR23AasEirpCdfGrid:badGeometryPreset');
+    r = check(r, okBad, ...
+        ['T17: extractGeometryNameValues rejects non-char ' ...
+         'aasGeometryPreset with badGeometryPreset']);
+end
+
+% =====================================================================
+% T18: resolveSsbOpts rejects a non-struct, non-empty opts.ssb.
+% =====================================================================
+function r = t_resolve_ssb_opts(r)
+    okBad = throwsId(@() runR23AasEirpCdfGrid(setfield(smallOpts(), ...
+        'ssb', 5)), 'runR23AasEirpCdfGrid:badSsbOpts');             %#ok<SFLD>
+    r = check(r, okBad, ...
+        'T18: resolveSsbOpts rejects opts.ssb=5 with badSsbOpts');
+end
+
+% =====================================================================
+% T19: environmentToDeployment maps environment -> deployment tag.
+% =====================================================================
+function r = t_environment_to_deployment(r)
+    base = struct( ...
+        'numMc',       2, ...
+        'azGridDeg',   -10:10:10, ...
+        'elGridDeg',   -10:5:0, ...
+        'binEdgesDbm', -80:5:120, ...
+        'seed',        5);
+
+    optsSub = base; optsSub.environment = 'suburban';
+    outSub  = runR23AasEirpCdfGrid(optsSub);
+
+    optsUrb = base; optsUrb.environment = 'urban';
+    outUrb  = runR23AasEirpCdfGrid(optsUrb);
+
+    okSub = strcmp(outSub.metadata.deployment, 'macroSuburban');
+    okUrb = strcmp(outUrb.metadata.deployment, 'macroUrban');
+    r = check(r, okSub && okUrb, sprintf( ...
+        ['T19: environmentToDeployment maps suburban->macroSuburban ' ...
+         '(%d) and urban->macroUrban (%d)'], okSub, okUrb));
+end
+
+% =====================================================================
+% T20: a non-finite maxEirpPerSector_dBm is rejected.
+% =====================================================================
+function r = t_bad_max_eirp(r)
+    okBad = throwsId(@() runR23AasEirpCdfGrid(setfield(smallOpts(), ...
+        'maxEirpPerSector_dBm', NaN)), ...
+        'runR23AasEirpCdfGrid:badMaxEirp');                         %#ok<SFLD>
+    r = check(r, okBad, ...
+        'T20: maxEirpPerSector_dBm=NaN throws badMaxEirp');
+end
+
+% =====================================================================
+% T21: numBeams vs numUesPerSector conflict warns; numUesPerSector wins.
+% =====================================================================
+function r = t_num_beams_conflict(r)
+    opts = smallOpts();
+    opts.numBeams        = 4;
+    opts.numUesPerSector = 3;
+
+    % Disable every other warning (e.g. the unrelated coarse-grid power
+    % self-check soft warning) and re-enable ONLY the conflict id, so the
+    % conflict warning is the sole one that can update lastwarn after it
+    % fires (disabled warnings do not update lastwarn). Restore the full
+    % prior warning state on exit.
+    prevWarn = warning('off', 'all');
+    cleanup  = onCleanup(@() warning(prevWarn)); %#ok<NASGU>
+    warning('on', 'runR23AasEirpCdfGrid:numBeamsConflict');
+    lastwarn('');
+
+    out = runR23AasEirpCdfGrid(opts);
+
+    [~, lastId] = lastwarn();
+    okWarn = strcmp(lastId, 'runR23AasEirpCdfGrid:numBeamsConflict');
+    okWins = out.stats.numBeams == 3;
+    r = check(r, okWarn && okWins, sprintf( ...
+        ['T21: numBeams=4 / numUesPerSector=3 conflict fires ' ...
+         'numBeamsConflict (warn=%d) and numUesPerSector wins ' ...
+         '(numBeams=%d, wins=%d)'], okWarn, out.stats.numBeams, okWins));
+end
+
+% =====================================================================
 % Helpers
 % =====================================================================
+function tf = throwsId(fn, id)
+%THROWSID True when FN errors with the exact MException identifier ID.
+    tf = false;
+    try
+        fn();
+    catch err
+        tf = strcmp(err.identifier, id);
+    end
+end
+
+function deleteIfExists(p)
+%DELETEIFEXISTS Best-effort delete of a temp file (never raises).
+    if exist(p, 'file') == 2
+        try
+            delete(p);
+        catch
+            % Leave the temp file on any failure; not fatal to the test.
+        end
+    end
+end
+
 function opts = smallOpts()
     opts = struct();
     opts.numMc       = 8;
