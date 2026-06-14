@@ -193,6 +193,51 @@ function out = runR23AasEirpCdfGrid(varargin)
 %       algorithm. ENABLED + rank 1 + layerSpreadDeg 0 is an IDENTITY
 %       expansion, byte-identical to OFF. See imtAasExpandUeLayers.
 %
+%   PRB / bandwidth weighting layer (non-breaking; default OFF;
+%   SENSITIVITY ONLY -- DEPARTS FROM ITU):
+%       opts.prbWeighting absent / [] -> disabled, and every existing output
+%           (stats, percentileMaps, the power self-check, opts.ssb,
+%           opts.epre, opts.layering) is BYTE-IDENTICAL to today for a fixed
+%           seed because the layer adds NO RNG draws when off
+%           (imtAasPrbWeights is not called at all). out.prbWeighting = [],
+%           out.metadata.includesPrbWeighting = false.
+%       opts.prbWeighting = struct(...) -> enables an UNEQUAL per-UE
+%           bandwidth (PRB) weighting that REPLACES the uniform per-beam
+%           power split (every beam at sectorEirp - 10*log10(N)) with
+%           perBeamEirp_u = sectorEirp + 10*log10(f_u), where f_u is UE u's
+%           fractional bandwidth share (sum f_u = 1). At constant EPRE (TS
+%           38.214 Clause 4.1) band-integrated power is proportional to PRB
+%           share. Fields (resolved + validated by imtAasPrbWeights):
+%             .enable   logical (default true when the struct is present)
+%             .mode     'fixed' | 'random' (default 'random')
+%             .weights  1xNue per-UE shares (mode 'fixed'); nonneg/finite,
+%                       not all zero; NORMALIZED to sum 1 internally
+%             .spread   scalar sigma >= 0 (mode 'random'); log-normal share
+%                       spread. sigma = 0 -> equal shares (recovers the ITU
+%                       baseline; consumes NO RNG); larger sigma -> more
+%                       unequal allocation. Default 0.5.
+%       *** SENSITIVITY ONLY -- DEPARTS FROM THE ITU M.2101 BASELINE. ***
+%       Unlike opts.layering (which reshapes the CDF but keeps the ITU power-
+%       split PHILOSOPHY) and unlike opts.epre (a separate per-RE envelope
+%       that never touches the baseline), opts.prbWeighting departs from the
+%       ITU equal-bandwidth ASSUMPTION itself (IMT characteristics Table A-2,
+%       Note 1: "UEs share equally the channel bandwidth"). It is therefore
+%       NOT ITU-compliant and must NEVER be the default: the equal-split ITU
+%       case is recovered by leaving it off and REMAINS the reference;
+%       weighted results are to be presented ALONGSIDE (never INSTEAD OF) the
+%       baseline. Like opts.layering, enabling it RESHAPES stats /
+%       percentileMaps / the EIRP CDF (it changes per-beam power). Total
+%       power is conserved (sum f_u = 1), so the band-integrated sector peak
+%       and the power self-check are unchanged in BOUND; only the SPATIAL
+%       distribution of the power changes. Band-integrated only: narrowband /
+%       per-subband (frequency-selective occupancy) behaviour is the separate
+%       subband / PRG item and is OUT OF SCOPE here -- the channel bandwidth
+%       and the dBm/MHz normalization basis are NOT changed. Composition with
+%       opts.layering is per-UE: UE u's power f_u is divided equally among its
+%       r_u layers (perLayerEirp = sectorEirp + 10*log10(f_u / r_u)). The
+%       scheduler / PRB-allocation model is STATISTICAL (implementation-
+%       defined in TS 38.214), NOT a normative algorithm. See imtAasPrbWeights.
+%
 %   Activity-weighted EIRP CDF layer (non-breaking; default OFF):
 %       opts.activityWeightedCdf (logical, default false) -> EXPLICIT
 %           trigger. When false (default), out.activityWeightedPercentileMaps
@@ -360,6 +405,19 @@ function out = runR23AasEirpCdfGrid(varargin)
 %                           config. Enabling layering RESHAPES stats /
 %                           percentileMaps (alternative scenario); the ITU
 %                           3-UE / rank-1 baseline is recovered with it off.
+%       .prbWeighting       PRB / bandwidth-weighting diagnostics when
+%                           opts.prbWeighting is enabled, else []
+%                           (SENSITIVITY ONLY, departs from ITU):
+%                             .perBeamPeakEirpDbm   struct .min/.mean/.max of
+%                                 the realized per-beam EIRP across draws
+%                             .participationRatio   struct .min/.mean/.max of
+%                                 the effective number of UEs (1/sum f_u^2)
+%                             .config / .notes / .specReference
+%                           out.metadata.includesPrbWeighting / .prbWeightingConfig
+%                           record whether the layer ran and the resolved
+%                           config. Enabling RESHAPES stats / percentileMaps
+%                           (NOT ITU-compliant); the equal-split ITU baseline
+%                           is recovered with it off and remains the reference.
 %       .percentileTable    optional table from
 %                           export_eirp_percentile_table when
 %                           opts.outputCsvPath is provided.
@@ -528,6 +586,24 @@ function out = runR23AasEirpCdfGrid(varargin)
     % performed downstream by imtAasExpandUeLayers.
     opts.layering = resolveLayeringOpts(getOpt(opts, 'layering', []));
 
+    % ---- PRB / bandwidth weighting option (non-breaking; default OFF;
+    %      SENSITIVITY ONLY -- DEPARTS FROM ITU) ------------------------
+    % opts.prbWeighting absent / [] -> disabled, and every existing output
+    % (stats, percentileMaps, the power self-check, opts.ssb, opts.epre,
+    % opts.layering) stays byte-identical for a fixed seed because the layer
+    % adds NO RNG draws when off (imtAasPrbWeights is not called at all). A
+    % struct presence enables the layer; opts.prbWeighting.enable defaults
+    % true. Unlike opts.layering (which keeps the ITU power-split philosophy)
+    % this DEPARTS from the ITU equal-bandwidth ASSUMPTION (Table A-2, Note 1),
+    % so it is NOT ITU-compliant and is sensitivity-only: the equal-split ITU
+    % baseline is recovered with it off and remains the reference. When on it
+    % RESHAPES the per-draw beam set (per-beam power), so stats /
+    % percentileMaps / the EIRP CDF change; total power is conserved
+    % (sum f_u = 1), so the band-integrated sector peak and self-check are
+    % unchanged in BOUND. Per-field validation is performed downstream by
+    % imtAasPrbWeights.
+    opts.prbWeighting = resolvePrbWeightingOpts(getOpt(opts, 'prbWeighting', []));
+
     % ---- activity-weighted EIRP CDF option (non-breaking; default OFF)
     % opts.activityWeightedCdf absent/false -> disabled, and stats /
     % percentileMaps / gainPercentileMaps / pointing / timeWeighted are
@@ -693,6 +769,20 @@ function out = runR23AasEirpCdfGrid(varargin)
             'perLayerMin', inf, 'perLayerMax', -inf, 'perLayerSum', 0);
     end
 
+    % ---- PRB / bandwidth weighting streaming aggregator -------------
+    % Only created when the layer is enabled, so the OFF path is untouched
+    % (and consumes no extra RNG). Accumulates running min/mean/max of the
+    % realized per-beam EIRP and of the participation ratio (effective number
+    % of UEs), plus the resolved config -- all fixed-size (no per-cell or
+    % per-draw cube), in the same streaming spirit as `stats` / `layAgg`.
+    prbWeightingEnabled = isstruct(opts.prbWeighting) && ...
+        isfield(opts.prbWeighting, 'enable') && opts.prbWeighting.enable;
+    if prbWeightingEnabled
+        prbAgg = struct( ...
+            'perBeamMin', inf, 'perBeamMax', -inf, 'perBeamSum', 0, 'perBeamCount', 0, ...
+            'prMin', inf, 'prMax', -inf, 'prSum', 0, 'config', []);
+    end
+
     tStart = tic;
     [hWaitbar_ml_mc_chunks,hWaitbarMsgQueue_ml_mc_chunks]= ParForWaitbarCreateMH_time('Number of MC: ',numMc);    %%%%%%% Create ParFor Waitbar, this one covers points and chunks
     for it = 1:numMc
@@ -734,6 +824,41 @@ function out = runR23AasEirpCdfGrid(varargin)
             layAgg.perLayerMin = min(layAgg.perLayerMin, perLayerDbm);
             layAgg.perLayerMax = max(layAgg.perLayerMax, perLayerDbm);
             layAgg.perLayerSum = layAgg.perLayerSum + perLayerDbm;
+        end
+
+        % ---- optional PRB / bandwidth weighting (SENSITIVITY ONLY) ---
+        % Gated on opts.prbWeighting.enable. Placed AFTER the layering block
+        % so it can see beams.layerUeIndex (per-UE composition) when layering
+        % is on; without layering each beam is its own UE. When disabled this
+        % branch is NOT entered, so imtAasPrbWeights consumes ZERO RNG and the
+        % loop's RNG stream (and therefore stats) is byte-identical to today.
+        % It attaches a per-beam peak EIRP vector to `beams`, which
+        % imtAasSectorEirpGridFromBeams uses INSTEAD of the uniform scalar
+        % split (departs from the ITU equal-split baseline). Total power is
+        % conserved (sum of the linear power fractions == 1).
+        if prbWeightingEnabled
+            if isfield(beams, 'layerUeIndex') && ~isempty(beams.layerUeIndex)
+                ueIdx = beams.layerUeIndex(:);
+            else
+                ueIdx = (1:numel(beams.steerAzDeg)).';
+            end
+            pw = imtAasPrbWeights(ueIdx, opts.prbWeighting);
+            if logical(opts.splitSectorPower)
+                beams.perBeamPeakEirpDbm = params.sectorEirpDbm + 10 * log10(pw.wBeam(:));
+            else
+                beams.perBeamPeakEirpDbm = repmat(params.sectorEirpDbm, numel(pw.wBeam), 1);
+            end
+            pk = beams.perBeamPeakEirpDbm;
+            prbAgg.perBeamMin   = min(prbAgg.perBeamMin, min(pk));
+            prbAgg.perBeamMax   = max(prbAgg.perBeamMax, max(pk));
+            prbAgg.perBeamSum   = prbAgg.perBeamSum + sum(pk);
+            prbAgg.perBeamCount = prbAgg.perBeamCount + numel(pk);
+            prbAgg.prMin = min(prbAgg.prMin, pw.participationRatio);
+            prbAgg.prMax = max(prbAgg.prMax, pw.participationRatio);
+            prbAgg.prSum = prbAgg.prSum + pw.participationRatio;
+            if isempty(prbAgg.config)
+                prbAgg.config = pw.config;
+            end
         end
 
         sectorOut = imtAasSectorEirpGridFromBeams( ...
@@ -1287,6 +1412,63 @@ function out = runR23AasEirpCdfGrid(varargin)
         out.metadata.includesLayering = false;
     end
 
+    % ---- optional PRB / bandwidth weighting diagnostics (SENSITIVITY) -
+    % Attaches NEW output fields only. The per-draw PRB weighting has already
+    % reshaped stats / percentileMaps (when enabled) -- this block only
+    % summarises the streaming PRB aggregator. When the layer is off,
+    % out.prbWeighting = [] and metadata.includesPrbWeighting = false, and
+    % every existing output is byte-identical to a no-prbWeighting run.
+    %
+    % NOTE: with PRB weighting on, the scalar metadata.perBeamPeakEirpDbm
+    % (computed pre-loop from the FIXED numUesPerSector, equal split) is
+    % NOMINAL only; the realized per-beam EIRP DISTRIBUTION is surfaced in
+    % out.prbWeighting.perBeamPeakEirpDbm. The band-integrated self-check
+    % (observed aggregate max <= sector peak) remains valid because total
+    % power is conserved (sum of the per-beam linear power fractions == 1).
+    % This is a SENSITIVITY SCENARIO that DEPARTS from the ITU equal-split
+    % baseline; the equal-split ITU case remains the reference and is
+    % recovered by leaving opts.prbWeighting off.
+    if prbWeightingEnabled
+        prbWeighting = struct();
+        prbWeighting.perBeamPeakEirpDbm = struct( ...
+            'min',  prbAgg.perBeamMin, ...
+            'mean', prbAgg.perBeamSum / max(prbAgg.perBeamCount, 1), ...
+            'max',  prbAgg.perBeamMax);
+        prbWeighting.participationRatio = struct( ...
+            'min',  prbAgg.prMin, ...
+            'mean', prbAgg.prSum / max(numMc, 1), ...
+            'max',  prbAgg.prMax);
+        prbWeighting.config = prbAgg.config;
+        prbWeighting.notes = ['PRB / bandwidth weighting scenario ', ...
+            '(SENSITIVITY ONLY -- DEPARTS FROM THE ITU M.2101 EQUAL-BANDWIDTH ', ...
+            'BASELINE). Each UE gets a fractional bandwidth share f_u ', ...
+            '(sum f_u = 1); at constant EPRE its band-integrated power is ', ...
+            'proportional to f_u, so perBeamEirp = sectorEirp + 10*log10(f_u) ', ...
+            '(divided across a UE''s layers when opts.layering is on). This ', ...
+            'is NOT ITU-compliant: the ITU equal-split case (each UE = 1/N of ', ...
+            'the bandwidth) remains THE reference and is recovered by leaving ', ...
+            'opts.prbWeighting off; weighted results are to be presented ', ...
+            'ALONGSIDE, never INSTEAD OF, the baseline. Total power is ', ...
+            'conserved (sum f_u = 1), so the band-integrated sector peak and ', ...
+            'self-check are unchanged in BOUND; only the SPATIAL distribution ', ...
+            'of the EIRP changes. Band-integrated only: narrowband / ', ...
+            'per-subband (frequency-selective occupancy) behaviour is a ', ...
+            'separate item and is out of scope. The scalar ', ...
+            'metadata.perBeamPeakEirpDbm is the FIXED-N equal-split nominal, ', ...
+            'NOT the realized per-beam power (see perBeamPeakEirpDbm above). ', ...
+            'Statistical PRB-allocation model, NOT a normative TS 38.214 ', ...
+            'scheduling algorithm.'];
+        prbWeighting.specReference = ['3GPP TS 38.214 V19.2.0 Clauses ', ...
+            '5.1.2.2, 5.1.2.2.1 / .2 (PDSCH frequency-domain resource ', ...
+            'allocation type 0 / type 1), Clause 4.1 (downlink EPRE).'];
+        out.prbWeighting = prbWeighting;
+        out.metadata.includesPrbWeighting = true;
+        out.metadata.prbWeightingConfig   = prbAgg.config;
+    else
+        out.prbWeighting = [];
+        out.metadata.includesPrbWeighting = false;
+    end
+
     % ---- optional CSV export ----------------------------------------
     if ~isempty(opts.outputCsvPath)
         out.percentileTable = export_eirp_percentile_table( ...
@@ -1829,6 +2011,28 @@ function layering = resolveLayeringOpts(raw)
         layering.enable = true;
     end
     layering.enable = logical(layering.enable);
+end
+
+function prbWeighting = resolvePrbWeightingOpts(raw)
+%RESOLVEPRBWEIGHTINGOPTS Read + normalize the optional opts.prbWeighting struct.
+%   [] / absent -> struct('enable', false) (the PRB / bandwidth weighting
+%   layer is OFF and every existing output is byte-identical for a fixed
+%   seed; no extra RNG is drawn). A struct presence enables the layer;
+%   opts.prbWeighting.enable defaults to true when the struct is supplied.
+%   The per-field validation (mode / weights / spread) is performed
+%   downstream by imtAasPrbWeights. This layer is SENSITIVITY ONLY and
+%   DEPARTS from the ITU equal-bandwidth baseline (see the docstring).
+    prbWeighting = struct('enable', false);
+    if isempty(raw); return; end
+    if ~isstruct(raw)
+        error('runR23AasEirpCdfGrid:badPrbWeightingOpts', ...
+            'opts.prbWeighting must be a struct (or empty).');
+    end
+    prbWeighting = raw;
+    if ~isfield(prbWeighting, 'enable') || isempty(prbWeighting.enable)
+        prbWeighting.enable = true;
+    end
+    prbWeighting.enable = logical(prbWeighting.enable);
 end
 
 function frame = resolveOutputFrame(opts)

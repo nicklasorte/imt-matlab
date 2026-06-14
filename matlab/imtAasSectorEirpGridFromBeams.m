@@ -28,6 +28,19 @@ function out = imtAasSectorEirpGridFromBeams(azGridDeg, elGridDeg, beams, params
 %                       steerAzDeg   per-beam steering azimuth [deg]
 %                       steerElDeg   per-beam steering elevation [deg]
 %                   Both must be finite real vectors of equal length.
+%                   OPTIONAL per-beam peak vector:
+%                       perBeamPeakEirpDbm  numBeams x 1 [dBm / 100 MHz].
+%                   When present, non-empty, of length numBeams, and
+%                   OPTS.SPLITSECTORPOWER is true, this PER-BEAM peak vector
+%                   is used as the per-beam peak EIRP (one value per beam,
+%                   e.g. an unequal PRB / bandwidth power split from
+%                   imtAasPrbWeights) INSTEAD of the uniform scalar
+%                   sectorEirp - 10*log10(numBeams). When absent / empty /
+%                   the wrong length, or when SPLITSECTORPOWER is false, the
+%                   historical SCALAR path is used and the output is
+%                   byte-identical to before. OUT.perBeamPeakEirpDbm echoes
+%                   whatever was used (scalar in the scalar path, vector in
+%                   the per-beam-vector path).
 %       PARAMS      optional imtAasDefaultParams struct (default
 %                   imtAasDefaultParams()).
 %       OPTS        optional struct. Recognised fields:
@@ -206,10 +219,26 @@ function out = imtAasSectorEirpGridFromBeams(azGridDeg, elGridDeg, beams, params
     end
 
     % ---- per-beam peak EIRP (the power split) -------------------------
-    if splitSectorPower
+    % Non-breaking per-beam-vector branch: when BEAMS carries an optional
+    % perBeamPeakEirpDbm vector (length numBeams) AND the sector power is
+    % being split, use that vector as the per-beam peak (e.g. an unequal
+    % PRB / bandwidth power split from imtAasPrbWeights). Otherwise fall
+    % through to the historical scalar split, which stays byte-identical:
+    % perBeamPeakVec = repmat(scalar, ...) so perBeamPeakVec(i) is the exact
+    % same double the scalar call passed today. OUT.perBeamPeakEirpDbm is
+    % set to whatever was used (scalar vs vector).
+    usePerBeamVector = splitSectorPower && isfield(beams, 'perBeamPeakEirpDbm') && ...
+        ~isempty(beams.perBeamPeakEirpDbm) && ...
+        numel(beams.perBeamPeakEirpDbm) == numBeams;
+    if usePerBeamVector
+        perBeamPeakVec     = double(beams.perBeamPeakEirpDbm(:));
+        perBeamPeakEirpDbm = perBeamPeakVec;                 % vector echoed to OUT
+    elseif splitSectorPower
         perBeamPeakEirpDbm = sectorEirpDbm - 10 * log10(numBeams);
+        perBeamPeakVec     = repmat(perBeamPeakEirpDbm, numBeams, 1);
     else
         perBeamPeakEirpDbm = sectorEirpDbm;
+        perBeamPeakVec     = repmat(perBeamPeakEirpDbm, numBeams, 1);
     end
 
     % ---- per-beam EIRP grids ------------------------------------------
@@ -221,10 +250,10 @@ function out = imtAasSectorEirpGridFromBeams(azGridDeg, elGridDeg, beams, params
     for i = 1:numBeams
         if computeGain
             [perBeamEirpDbm(:, :, i), perBeamGainDbi(:, :, i)] = imtAasEirpGrid( ...
-                azVec, elVec, steerAz(i), steerEl(i), perBeamPeakEirpDbm, params);
+                azVec, elVec, steerAz(i), steerEl(i), perBeamPeakVec(i), params);
         else
             perBeamEirpDbm(:, :, i) = imtAasEirpGrid( ...
-                azVec, elVec, steerAz(i), steerEl(i), perBeamPeakEirpDbm, params);
+                azVec, elVec, steerAz(i), steerEl(i), perBeamPeakVec(i), params);
         end
     end
 
