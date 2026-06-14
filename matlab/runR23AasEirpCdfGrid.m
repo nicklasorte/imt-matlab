@@ -142,6 +142,48 @@ function out = runR23AasEirpCdfGrid(varargin)
 %       boosted RE) and is not clamped to it. See imtAasEpreOffsets and
 %       imtAasApplyEpreEnvelope.
 %
+%   Rank / MU-MIMO layering layer (non-breaking; default OFF):
+%       opts.layering absent / [] -> disabled, and every existing output
+%           (stats, percentileMaps, the power self-check, opts.ssb,
+%           opts.epre) is BYTE-IDENTICAL to today for a fixed seed (the
+%           layer adds NO RNG draws when off).
+%       opts.layering = struct(...) -> enables a rank / MU-MIMO layering
+%           model consistent with the 3GPP TS 38.214 V19.2.0 framework that
+%           REPLACES the implicit "N beams = N rank-1 UEs, each at
+%           sectorEirp - 10*log10(N)" assumption. Each of the
+%           numUesPerSector co-scheduled UEs is served with a RANK r_u
+%           (1..8 layers); the total layer count L = sum(r_u) is capped at
+%           maxTotalLayers (single-panel port bound); the sector power is
+%           split across L LAYERS (perLayer = sectorEirp - 10*log10(L));
+%           and the r_u > 1 layers of a UE are placed in a small Gaussian
+%           angular cone around that UE's direction (a stand-in for channel
+%           angular spread -- there is NO channel model in this repo).
+%           Fields (resolved + validated by imtAasExpandUeLayers):
+%             .rank            positive integer -> FIXED rank (default 1)
+%                              OR 1xR prob vector -> rank PMF over 1..R
+%             .maxTotalLayers  integer >= 1 (default 8)
+%             .layerSpreadDeg  scalar OR [sigmaAz sigmaEl] (default 2 deg;
+%                              0 => layers co-located)
+%             .clipRule        'greedy' (default; trim highest-rank UEs
+%                              first when sum(r_u) > maxTotalLayers)
+%       UNLIKE opts.epre (a post-hoc per-RE envelope that never touches the
+%       band-integrated CDF), opts.layering changes the per-draw BEAM SET,
+%       so when enabled it DOES reshape stats / percentileMaps / the EIRP
+%       CDF -- that is the point. This is an explicitly-labelled ALTERNATIVE
+%       SCENARIO for sensitivity, not the new default: the ITU 3-UE /
+%       rank-1 baseline (IMT characteristics Table A-2, Note 1: "the AAS BS
+%       beamforms towards each UE using the entire array") is recovered
+%       EXACTLY by leaving opts.layering off. Total radiated power is
+%       conserved (L layers at sectorEirp - 10*log10(L) sum to sectorEirp),
+%       so the band-integrated sector peak and the power self-check are
+%       unchanged in BOUND; only the SPATIAL distribution of the EIRP
+%       changes. Layers are summed INCOHERENTLY in linear mW (the existing
+%       multi-beam convention). The scheduler / rank / power-split model is
+%       STATISTICAL (gNB co-scheduling, power split and rank selection are
+%       implementation-defined in TS 38.214), NOT a normative 38.214
+%       algorithm. ENABLED + rank 1 + layerSpreadDeg 0 is an IDENTITY
+%       expansion, byte-identical to OFF. See imtAasExpandUeLayers.
+%
 %   Activity-weighted EIRP CDF layer (non-breaking; default OFF):
 %       opts.activityWeightedCdf (logical, default false) -> EXPLICIT
 %           trigger. When false (default), out.activityWeightedPercentileMaps
@@ -291,6 +333,24 @@ function out = runR23AasEirpCdfGrid(varargin)
 %                             .notes / .specReference
 %                           out.metadata.includesEpre / .epreConfig record
 %                           whether the layer ran and the resolved config.
+%       .layering           rank / MU-MIMO layering diagnostics when
+%                           opts.layering is enabled, else []:
+%                             .realizedTotalLayers  struct .min/.mean/.max of
+%                                 the per-draw total layer count L
+%                             .realizedRankTally    struct .rankValues (1..R)
+%                                 and .counts (ranks observed across all
+%                                 UE-draws)
+%                             .perLayerPeakEirpDbm   struct .min/.mean/.max of
+%                                 the realized per-layer peak EIRP
+%                                 (sectorEirp - 10*log10(L))
+%                             .clipCount   total layers trimmed by clipRule
+%                             .config      resolved layering config
+%                             .notes / .specReference
+%                           out.metadata.includesLayering / .layeringConfig
+%                           record whether the layer ran and the resolved
+%                           config. Enabling layering RESHAPES stats /
+%                           percentileMaps (alternative scenario); the ITU
+%                           3-UE / rank-1 baseline is recovered with it off.
 %       .percentileTable    optional table from
 %                           export_eirp_percentile_table when
 %                           opts.outputCsvPath is provided.
@@ -442,6 +502,23 @@ function out = runR23AasEirpCdfGrid(varargin)
     % envelope and never mutates the band-integrated path.
     opts.epre = resolveEpreOpts(getOpt(opts, 'epre', []));
 
+    % ---- rank / MU-MIMO layering option (non-breaking; default OFF) --
+    % opts.layering absent / [] -> disabled, and every existing output
+    % (stats, percentileMaps, the power self-check, opts.ssb, opts.epre)
+    % stays byte-identical for a fixed seed because the layer adds NO RNG
+    % draws when off (imtAasExpandUeLayers is not called at all). A struct
+    % presence enables the layer; opts.layering.enable defaults true. Unlike
+    % opts.epre (a post-hoc per-RE envelope), opts.layering changes the
+    % per-draw BEAM SET, so when enabled it DOES reshape stats /
+    % percentileMaps / the EIRP CDF -- that is the point. Total radiated
+    % power is still conserved (L layers at sectorEirp - 10*log10(L) sum to
+    % sectorEirp), so the band-integrated sector peak and the self-check are
+    % unchanged in BOUND; only the SPATIAL distribution of the power changes.
+    % The ITU 3-UE / rank-1 baseline (IMT characteristics Table A-2, Note 1)
+    % is recovered exactly by leaving this off. Per-field validation is
+    % performed downstream by imtAasExpandUeLayers.
+    opts.layering = resolveLayeringOpts(getOpt(opts, 'layering', []));
+
     % ---- activity-weighted EIRP CDF option (non-breaking; default OFF)
     % opts.activityWeightedCdf absent/false -> disabled, and stats /
     % percentileMaps / gainPercentileMaps / pointing / timeWeighted are
@@ -591,12 +668,64 @@ function out = runR23AasEirpCdfGrid(varargin)
     progressEvery = double(opts.progressEvery);
     numMc         = double(opts.numMc);
 
+    % ---- rank / MU-MIMO layering streaming aggregator ---------------
+    % Only created when the layer is enabled, so the OFF path is untouched
+    % (and consumes no extra RNG). Accumulates running min/mean/max of the
+    % realized total layer count L, a tally of realized ranks, the total
+    % clipped-layer count, and the realized per-layer peak EIRP range -- all
+    % fixed-size (no per-cell or per-draw cube), in the same streaming spirit
+    % as `stats`.
+    layeringEnabled = isstruct(opts.layering) && ...
+        isfield(opts.layering, 'enable') && opts.layering.enable;
+    if layeringEnabled
+        layAgg = struct( ...
+            'totalLayersMin', inf, 'totalLayersMax', -inf, 'totalLayersSum', 0, ...
+            'clipSum', 0, 'rankTally', [], 'config', [], ...
+            'perLayerMin', inf, 'perLayerMax', -inf, 'perLayerSum', 0);
+    end
+
     tStart = tic;
     [hWaitbar_ml_mc_chunks,hWaitbarMsgQueue_ml_mc_chunks]= ParForWaitbarCreateMH_time('Number of MC: ',numMc);    %%%%%%% Create ParFor Waitbar, this one covers points and chunks
     for it = 1:numMc
         it
         beamGenOpts = struct('clampElevation', logical(opts.clampElevation));
         beams = imtAasGenerateBeamSet(numBeams, sector, beamGenOpts);
+
+        % ---- optional rank / MU-MIMO layer expansion ----------------
+        % Gated on opts.layering.enable. When disabled this branch is NOT
+        % entered, so imtAasExpandUeLayers consumes ZERO RNG and the loop's
+        % RNG stream (and therefore stats) is byte-identical to today. When
+        % enabled it expands the N UE beams into L = sum(r_u) layer beams;
+        % everything downstream (imtAasSectorEirpGridFromBeams, the pointing
+        % histogram, update_eirp_histograms) is unchanged and now sees L
+        % layers, with the per-layer power split (sectorEirp - 10*log10(L))
+        % and incoherent linear-mW sum falling out automatically.
+        if layeringEnabled
+            beams = imtAasExpandUeLayers(beams, sector, opts.layering);
+            L = double(beams.totalLayers);
+            layAgg.totalLayersMin = min(layAgg.totalLayersMin, L);
+            layAgg.totalLayersMax = max(layAgg.totalLayersMax, L);
+            layAgg.totalLayersSum = layAgg.totalLayersSum + L;
+            layAgg.clipSum        = layAgg.clipSum + double(beams.clipped);
+            if isempty(layAgg.rankTally)
+                layAgg.rankTally = zeros(1, double(beams.config.maxRank));
+                layAgg.config    = beams.config;
+            end
+            rr = beams.realizedRankPerUe;
+            for u = 1:numel(rr)
+                if rr(u) >= 1 && rr(u) <= numel(layAgg.rankTally)
+                    layAgg.rankTally(rr(u)) = layAgg.rankTally(rr(u)) + 1;
+                end
+            end
+            if logical(opts.splitSectorPower)
+                perLayerDbm = params.sectorEirpDbm - 10 * log10(L);
+            else
+                perLayerDbm = params.sectorEirpDbm;
+            end
+            layAgg.perLayerMin = min(layAgg.perLayerMin, perLayerDbm);
+            layAgg.perLayerMax = max(layAgg.perLayerMax, perLayerDbm);
+            layAgg.perLayerSum = layAgg.perLayerSum + perLayerDbm;
+        end
 
         sectorOut = imtAasSectorEirpGridFromBeams( ...
             azGrid, elGrid, beams, params, sectorOpts);
@@ -1098,6 +1227,55 @@ function out = runR23AasEirpCdfGrid(varargin)
     else
         out.epre = [];
         out.metadata.includesEpre = false;
+    end
+
+    % ---- optional rank / MU-MIMO layering diagnostics ---------------
+    % Attaches NEW output fields only. The per-draw layer expansion has
+    % already reshaped stats / percentileMaps (when enabled) -- this block
+    % only summarises the streaming layering aggregator. When the layer is
+    % off, out.layering = [] and metadata.includesLayering = false, and
+    % every existing output is byte-identical to a no-layering run.
+    %
+    % NOTE: with layering on, the scalar metadata.perBeamPeakEirpDbm
+    % (computed pre-loop from the FIXED numUesPerSector) is no longer the
+    % realized per-layer power; the realized per-layer power DISTRIBUTION is
+    % surfaced in out.layering.perLayerPeakEirpDbm. The band-integrated
+    % self-check (observed aggregate max <= sector peak) remains valid
+    % because total power is conserved regardless of L.
+    if layeringEnabled
+        layering = struct();
+        layering.realizedTotalLayers = struct( ...
+            'min',  layAgg.totalLayersMin, ...
+            'mean', layAgg.totalLayersSum / max(numMc, 1), ...
+            'max',  layAgg.totalLayersMax);
+        layering.realizedRankTally = struct( ...
+            'rankValues', 1:numel(layAgg.rankTally), ...
+            'counts',     layAgg.rankTally);
+        layering.perLayerPeakEirpDbm = struct( ...
+            'min',  layAgg.perLayerMin, ...
+            'mean', layAgg.perLayerSum / max(numMc, 1), ...
+            'max',  layAgg.perLayerMax);
+        layering.clipCount     = layAgg.clipSum;
+        layering.config        = layAgg.config;
+        layering.notes = ['Rank / MU-MIMO layering scenario (alternative ', ...
+            'to the ITU 3-UE / rank-1 baseline). Each UE served with a rank ', ...
+            'r_u; sector power split across L = sum(r_u) layers ', ...
+            '(perLayer = sectorEirp - 10*log10(L)); layers summed ', ...
+            'incoherently in linear mW. Total power conserved, so the ', ...
+            'band-integrated sector peak and self-check are unchanged in ', ...
+            'bound; only the spatial distribution of the EIRP changes. The ', ...
+            'scalar metadata.perBeamPeakEirpDbm is the FIXED-N pre-loop ', ...
+            'value, NOT the realized per-layer power (see ', ...
+            'perLayerPeakEirpDbm). Statistical gNB-behaviour model, NOT a ', ...
+            'normative TS 38.214 scheduling algorithm.'];
+        layering.specReference = ['3GPP TS 38.214 V19.2.0 Clauses 5.1.1.1, ', ...
+            '5.1.6.2, 5.2.2.5.1, 5.2.2.2.x.'];
+        out.layering = layering;
+        out.metadata.includesLayering = true;
+        out.metadata.layeringConfig   = layAgg.config;
+    else
+        out.layering = [];
+        out.metadata.includesLayering = false;
     end
 
     % ---- optional CSV export ----------------------------------------
@@ -1617,6 +1795,27 @@ function epre = resolveEpreOpts(raw)
     epre = raw;
     if ~isfield(epre, 'enable') || isempty(epre.enable); epre.enable = true; end
     epre.enable = logical(epre.enable);
+end
+
+function layering = resolveLayeringOpts(raw)
+%RESOLVELAYERINGOPTS Read + normalize the optional opts.layering struct.
+%   [] / absent -> struct('enable', false) (the rank / MU-MIMO layering
+%   layer is OFF and every existing output is byte-identical for a fixed
+%   seed; no extra RNG is drawn). A struct presence enables the layer;
+%   opts.layering.enable defaults to true when the struct is supplied. The
+%   per-field validation (rank / rank PMF / maxTotalLayers / layerSpreadDeg /
+%   clipRule) is performed downstream by imtAasExpandUeLayers.
+    layering = struct('enable', false);
+    if isempty(raw); return; end
+    if ~isstruct(raw)
+        error('runR23AasEirpCdfGrid:badLayeringOpts', ...
+            'opts.layering must be a struct (or empty).');
+    end
+    layering = raw;
+    if ~isfield(layering, 'enable') || isempty(layering.enable)
+        layering.enable = true;
+    end
+    layering.enable = logical(layering.enable);
 end
 
 function frame = resolveOutputFrame(opts)
