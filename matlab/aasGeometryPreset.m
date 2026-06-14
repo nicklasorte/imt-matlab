@@ -50,6 +50,29 @@ function geom = aasGeometryPreset(presetName, varargin)
 %         Total physical elements across two polarizations = 768.
 %         Calculated antenna gain ~= 32.2 dBi.
 %
+%     "r23_micro_8x8"
+%         ITU-R R23 7.125-8.4 GHz "Small cell outdoor / Micro urban"
+%         beamforming case (IMT characteristics Table 19). This is an
+%         8x8 ELEMENT array with NO sub-array (unity sub-array factor;
+%         Table rows 1.7a/1.7b/1.7c = N/A) and 0.7 lambda ELEMENT vertical
+%         spacing (no grating lobes).
+%             arrayRows                                   = 8
+%             arrayCols                                   = 8
+%             subarrayElementRows                         = 1   (no sub-array)
+%             subarrayElementCols                         = 1
+%             subarrayElementVerticalSpacingLambda        = 0.7
+%             radiatingSubarrayHorizontalSpacingLambda    = 0.5
+%             radiatingSubarrayVerticalSpacingLambda      = 0.7
+%               (= ELEMENT vertical spacing; one element per sub-array)
+%             subarrayDowntiltDeg                         = 0   (row 1.7c N/A)
+%             mechanicalDowntiltDeg                       = 10
+%             elementGainDbi                              = 6.4
+%             sectorEirpDbm                               = 61.5
+%             conductedPowerDbm                           = 37.0
+%               (= 16 dBm/elem + 10*log10(64) + 10*log10(2 pol))
+%         Total physical elements across two polarizations = 128.
+%         Calculated antenna gain ~= 24.46 dBi (= 6.4 + 10*log10(8*8)).
+%
 %     "custom"
 %         All required geometry fields must be supplied as Name,Value
 %         overrides. Use this for explicit sensitivity studies.
@@ -142,6 +165,26 @@ function geom = aasGeometryPreset(presetName, varargin)
                 'conductedPowerDbm',                        58.6);
             requireAllFields = false;
 
+        case {'r23_micro_8x8', 'r23-micro-8x8', 'micro_8x8', 'micro'}
+            canonical = 'r23_micro_8x8';
+            % ITU-R R23 7.125-8.4 GHz Small cell outdoor / Micro urban.
+            % 8x8 ELEMENT array, NO sub-array (unity sub-array factor),
+            % 0.7 lambda ELEMENT vertical spacing (no grating lobes).
+            base = struct( ...
+                'arrayRows',                                8, ...
+                'arrayCols',                                8, ...
+                'subarrayElementRows',                      1, ...
+                'subarrayElementCols',                      1, ...
+                'subarrayElementVerticalSpacingLambda',     0.7, ...
+                'radiatingSubarrayHorizontalSpacingLambda', 0.5, ...
+                'radiatingSubarrayVerticalSpacingLambda',   0.7, ...
+                'subarrayDowntiltDeg',                      0, ...
+                'mechanicalDowntiltDeg',                    10, ...
+                'elementGainDbi',                           6.4, ...
+                'sectorEirpDbm',                            61.5, ...
+                'conductedPowerDbm',                        37.0);
+            requireAllFields = false;
+
         case 'custom'
             canonical = 'custom';
             base = struct();
@@ -150,7 +193,8 @@ function geom = aasGeometryPreset(presetName, varargin)
         otherwise
             error('aasGeometryPreset:unknownPreset', ...
                 ['Unknown aasGeometryPreset "%s". Supported: ' ...
-                 '"r23_1x3_default", "ctia_7ghz_1x6", "custom".'], ...
+                 '"r23_1x3_default", "ctia_7ghz_1x6", "r23_micro_8x8", ' ...
+                 '"custom".'], ...
                 presetName);
     end
 
@@ -203,6 +247,18 @@ function geom = aasGeometryPreset(presetName, varargin)
         if geom.totalPhysicalElementsAcrossPolarizations ~= 768
             error('aasGeometryPreset:ctiaElementCountMismatch', ...
                 ['ctia_7ghz_1x6 preset must yield 768 physical elements ' ...
+                 'across two polarizations (got %d). This indicates a ' ...
+                 'preset-table regression.'], ...
+                geom.totalPhysicalElementsAcrossPolarizations);
+        end
+    end
+
+    % Sanity check for the named micro preset: it should hit 128 total
+    % elements (2 pol x 8 x 8, no sub-array) unless explicitly overridden.
+    if strcmp(canonical, 'r23_micro_8x8') && ~geom.hasOverrides
+        if geom.totalPhysicalElementsAcrossPolarizations ~= 128
+            error('aasGeometryPreset:microElementCountMismatch', ...
+                ['r23_micro_8x8 preset must yield 128 physical elements ' ...
                  'across two polarizations (got %d). This indicates a ' ...
                  'preset-table regression.'], ...
                 geom.totalPhysicalElementsAcrossPolarizations);
