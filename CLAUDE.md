@@ -320,6 +320,84 @@ broadcast duty-cycle model, the `opts.epre` per-RE density, the
 `opts.layering` rank/MU-MIMO model, and the `opts.beamSelection` codebook
 path.
 
+## Per-subband / narrowband EIRP option (`opts.subband`) — separate output, narrowband worst case
+
+`runR23AasEirpCdfGrid` has an optional, **default-off** per-subband
+(narrowband) EIRP **density** layer driven by the nested `opts.subband`
+struct. The band-integrated heatmap answers the **wideband-victim**
+question (power summed over the full channel bandwidth); `opts.subband`
+answers the **narrowband-victim** question (often the binding FSS / EESS
+coordination constraint). At constant EPRE (3GPP **TS 38.214 V19.2.0 Clause
+4.1**), under frequency-division scheduling (OFDMA — the ITU "each UE gets
+1/N of the bandwidth" picture taken literally) any **narrow** slice of
+spectrum is occupied by a **single** UE's beam radiating at the **full**
+per-RE EPRE density — *not* the `sectorEirp − 10·log10(N)` band-split power.
+So a narrowband victim at direction θ sees, in the worst sub-band, the
+**best-aligned co-scheduled beam at full EPRE density**, and the per-subband
+EIRP density (dBm/MHz) is **about 10·log10(N) higher** than the
+band-integrated dBm/MHz density at a beam center. Implemented by one new
+one-function-per-file module that reuses the existing antenna engine — **no
+new antenna math**:
+
+- `imtAasSubbandEnvelope.m` — pure (**no RNG**). Evaluates every beam at the
+  **full sector EIRP** (no power split; uses `imtAasSectorEirpGridFromBeams`
+  with `splitSectorPower = false`, the foolproof fallback path, ~2× envelope
+  cost per draw) and returns the per-cell max-over-beams density
+  `perSubbandDensityEnvelope_dBmPerMHz = maxEnvelopeEirpDbm(full EPRE) −
+  10·log10(bandwidthMHz)`, the headline `perSubbandPeak_dBmPerMHz =
+  sectorEirp − 10·log10(bandwidthMHz)`, the `subbandMHz` validity bound, the
+  resolved `config`, narrowband-worst-case `notes`, and a `specReference`.
+  The equivalent efficient form (`conductedPowerDensity + maxEnvelopeGainDbi`)
+  is documented in the config but the fallback is used so the single-beam
+  reduction is exact and the user-facing `gainStats` is untouched.
+
+**Unlike `opts.layering` / `opts.prbWeighting`** (which **reshape** the
+band-integrated CDF), `opts.subband` is a **separate output in the style of
+`opts.epre`**: it accumulates into its **own** streaming histogram (its own
+density-domain bin edges) and attaches only NEW fields (`out.subband`,
+`out.metadata.includesSubband` / `.subbandConfig`). When off, `out.subband =
+[]` and every existing output is **byte-identical** for a fixed seed.
+
+**Invariants (enforced by `test_imtAasSubbandEnvelope` and
+`test_runR23AasEirpCdfGrid_subband`):**
+
+- **Byte-identical when off (and even when on).** `opts.subband` consumes
+  **zero RNG** and **never touches** `stats` / `percentileMaps` /
+  `selfCheck` / `out.ssb` / `out.epre` / `out.layering` / `out.prbWeighting`
+  — enabling it leaves all of them byte-identical for a fixed seed. This is
+  the cleanest non-breaking layer.
+- **Headline peak.** `out.subband.perSubbandPeak_dBmPerMHz == sectorEirp −
+  10·log10(bandwidthMHz)` (within `1e-9`).
+- **`~10·log10(N)` delta.** `out.subband.deltaVsBandIntegrated_dB` (measured
+  at the co-located per-subband-hottest cell so grid-miss cancels) ≈
+  `10·log10(N)` within `0.1` dB; `deltaNominal_dB == 10·log10(N)` exactly.
+- **Power-split-independent.** Because a narrowband victim sees one beam at
+  full EPRE, the per-subband density depends **only on the beam
+  directions** — it is identical with vs without `opts.prbWeighting` (no-RNG
+  fixed config) and with vs without the `opts.layering` power split (fixed
+  rank 1 / spread 0, identity expansion), same seed. It **does** use the
+  layer-expanded `L` directions, so it composes with `opts.layering`.
+- **Validity bound.** `subbandMHz > bandwidthMHz / N` sets the
+  `out.subband.validity.spansMultipleUeAllocations` flag (sub-band would span
+  >1 UE allocation; single-beam worst case is optimistic); validate `0 <
+  subbandMHz <= bandwidthMHz` (`imtAasSubbandEnvelope:invalidSubbandMHz`).
+
+The **band-integrated ITU result (78.3 dBm/100 MHz sector EIRP) remains the
+baseline.** `out.subband.percentileMaps` is a **separate** per-subband
+density distribution (dBm/MHz), presented **alongside** the band-integrated
+baseline, **not** additive with the band-integrated dBm/MHz CDF. It is the
+narrowband **worst case** under a frequency-division assumption — a
+statistical model consistent with the TS 38.214 framework, **not** a
+normative scheduling result. Out of scope (note as future refinements): per
+sub-band precoding / PRG angular variation, the full per-subband occupancy
+*distribution* (only the worst-case envelope is computed), and per-RE EPRE
+boosts (combining `opts.subband` with `opts.epre`'s DM-RS boost gives the
+absolute narrowband worst case, but `opts.subband` stays at nominal EPRE).
+This is distinct from the `opts.ssb` broadcast duty-cycle model, the
+`opts.epre` per-RE density, the `opts.layering` rank/MU-MIMO model, the
+`opts.prbWeighting` bandwidth weighting, and the `opts.beamSelection`
+codebook path.
+
 ## Angle conventions (matched to pycraf and M.2101)
 
 - External `azim ∈ [-180°, 180°]`, `elev ∈ [-90°, 90°]`

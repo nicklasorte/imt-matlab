@@ -238,6 +238,41 @@ function out = runR23AasEirpCdfGrid(varargin)
 %       scheduler / PRB-allocation model is STATISTICAL (implementation-
 %       defined in TS 38.214), NOT a normative algorithm. See imtAasPrbWeights.
 %
+%   Per-subband / narrowband EIRP density layer (non-breaking; default OFF):
+%       opts.subband absent / [] -> disabled, and every existing output
+%           (stats, percentileMaps, the power self-check, opts.ssb, opts.epre,
+%           opts.layering, opts.prbWeighting) is BYTE-IDENTICAL to today for a
+%           fixed seed. The layer consumes NO RNG (it depends only on the
+%           already-drawn beam directions plus a constant power offset), so
+%           byte-identical-when-off is trivial. out.subband = [],
+%           out.metadata.includesSubband = false.
+%       opts.subband = struct(...) -> enables a SEPARATE narrowband
+%           (per-subband) worst-case EIRP DENSITY output [dBm/MHz], the
+%           frequency-selective-occupancy / narrowband-victim view. Fields:
+%             .enable      logical (default true when the struct is present)
+%             .subbandMHz  victim reference bandwidth, 0 < x <= bandwidthMHz
+%                          (default 1; dBm/MHz convention)
+%             .percentiles optional 1xP vector (default = opts.percentiles)
+%       Unlike opts.layering / opts.prbWeighting (which RESHAPE the
+%       band-integrated CDF), opts.subband is a SEPARATE OUTPUT in the style
+%       of opts.epre: it NEVER touches stats / percentileMaps / the
+%       band-integrated CDF / the self-check. The band-integrated ITU result
+%       (78.3 dBm/100 MHz sector EIRP) is and remains THE reference. At
+%       constant EPRE (TS 38.214 Clause 4.1), under frequency-division
+%       scheduling a NARROW sub-band is occupied by a SINGLE UE's beam at the
+%       FULL conducted-power density (not the band-split sectorEirp -
+%       10*log10(N)), so a narrowband victim sees the best-aligned beam at
+%       full EPRE: the per-subband density is ABOUT 10*log10(N) HIGHER than
+%       the band-integrated dBm/MHz density at a beam center. It is
+%       POWER-SPLIT-INDEPENDENT (depends only on beam directions, so it is
+%       unaffected by opts.prbWeighting and the opts.layering power split, and
+%       composes with opts.layering's L layer directions). It is the
+%       narrowband WORST CASE under a frequency-division assumption, a
+%       statistical model consistent with the TS 38.214 framework, NOT a
+%       normative scheduling result; the per-subband result is an additional
+%       view for narrowband victims, presented ALONGSIDE the band-integrated
+%       baseline. See imtAasSubbandEnvelope.
+%
 %   Activity-weighted EIRP CDF layer (non-breaking; default OFF):
 %       opts.activityWeightedCdf (logical, default false) -> EXPLICIT
 %           trigger. When false (default), out.activityWeightedPercentileMaps
@@ -418,6 +453,29 @@ function out = runR23AasEirpCdfGrid(varargin)
 %                           config. Enabling RESHAPES stats / percentileMaps
 %                           (NOT ITU-compliant); the equal-split ITU baseline
 %                           is recovered with it off and remains the reference.
+%       .subband            per-subband / narrowband EIRP DENSITY view when
+%                           opts.subband is enabled, else [] (SEPARATE output;
+%                           the band-integrated baseline is byte-identical
+%                           when off):
+%                             .subbandMHz   victim reference bandwidth [MHz]
+%                             .perSubbandPeak_dBmPerMHz  scalar headline
+%                                 boresight density = sectorEirp -
+%                                 10*log10(bandwidthMHz)
+%                             .deltaVsBandIntegrated_dB  scalar headline,
+%                                 measured (perSubband peak density minus the
+%                                 band-integrated peak density); ~10*log10(N)
+%                             .deltaNominal_dB  nominal 10*log10(numBeams)
+%                             .percentileMaps  Naz x Nel x P per-subband
+%                                 worst-case density [dBm/MHz] (same struct
+%                                 shape as the band-integrated percentileMaps)
+%                             .stats        streaming per-subband aggregator
+%                             .validity     single-beam-per-subband bound flag
+%                             .config / .notes / .specReference
+%                           out.metadata.includesSubband / .subbandConfig
+%                           record whether the layer ran and the resolved
+%                           config. SEPARATE output (like opts.epre): the
+%                           band-integrated CDF is NOT reshaped and is
+%                           byte-identical when off.
 %       .percentileTable    optional table from
 %                           export_eirp_percentile_table when
 %                           opts.outputCsvPath is provided.
@@ -604,6 +662,20 @@ function out = runR23AasEirpCdfGrid(varargin)
     % imtAasPrbWeights.
     opts.prbWeighting = resolvePrbWeightingOpts(getOpt(opts, 'prbWeighting', []));
 
+    % ---- per-subband / narrowband EIRP density option (default OFF) ---
+    % opts.subband absent / [] -> disabled, and every existing output
+    % (stats, percentileMaps, the power self-check, opts.ssb, opts.epre,
+    % opts.layering, opts.prbWeighting) stays byte-identical for a fixed seed
+    % because the layer adds NO RNG draws and never touches the
+    % band-integrated path. A struct presence enables the layer;
+    % opts.subband.enable defaults true. Like opts.epre it is a SEPARATE
+    % output: it surfaces the narrowband (per-subband) worst-case EIRP density
+    % [dBm/MHz] (one beam per occupied sub-band at full EPRE, ~10*log10(N)
+    % above the band-integrated dBm/MHz density), and is POWER-SPLIT-
+    % INDEPENDENT (depends only on the beam directions). The subbandMHz field
+    % validation itself is performed downstream by imtAasSubbandEnvelope.
+    opts.subband = resolveSubbandOpts(getOpt(opts, 'subband', []));
+
     % ---- activity-weighted EIRP CDF option (non-breaking; default OFF)
     % opts.activityWeightedCdf absent/false -> disabled, and stats /
     % percentileMaps / gainPercentileMaps / pointing / timeWeighted are
@@ -783,6 +855,39 @@ function out = runR23AasEirpCdfGrid(varargin)
             'prMin', inf, 'prMax', -inf, 'prSum', 0, 'config', []);
     end
 
+    % ---- per-subband / narrowband EIRP density streaming aggregator --
+    % Only created when the layer is enabled, so the OFF path is untouched
+    % (and consumes no extra RNG). The per-subband density [dBm/MHz] is
+    % accumulated into its OWN streaming histogram (its own bin edges in the
+    % density domain), reusing update_eirp_histograms / eirp_percentile_maps,
+    % in the same streaming spirit as `stats`. The band-integrated `stats` is
+    % NEVER touched. The subbandMHz field validation is performed downstream
+    % by imtAasSubbandEnvelope on the first loop iteration.
+    subbandEnabled = isstruct(opts.subband) && ...
+        isfield(opts.subband, 'enable') && opts.subband.enable;
+    if subbandEnabled
+        subbandBwMHz   = double(params.bandwidthMHz);
+        subbandBandOff = 10 * log10(subbandBwMHz);
+        subbandMHz     = getOpt(opts.subband, 'subbandMHz', 1);
+        subbandPercentiles = getOpt(opts.subband, 'percentiles', opts.percentiles);
+        subbandPercentiles = double(subbandPercentiles(:).');
+        % Dedicated histogram in the density domain: shift the band-integrated
+        % bin edges by -10*log10(bandwidthMHz) so the same relative resolution
+        % covers the per-subband density (which sits ~10*log10(N) above the
+        % band-integrated dBm/MHz density at a beam center).
+        subbandEdges = edges - subbandBandOff;
+        NbinSub      = numel(subbandEdges) - 1;
+        subbandStats = struct('azGrid',azGrid, 'elGrid',elGrid, 'binEdges',subbandEdges, ...
+            'counts',zeros(Naz,Nel,NbinSub,'uint32'), 'sum_lin_mW',zeros(Naz,Nel), ...
+            'min_dBm',inf(Naz,Nel), 'max_dBm',-inf(Naz,Nel), 'numMc',0, ...
+            'units','dBm/MHz', 'aggregation','max_over_beams_full_epre_density');
+        subbandCfg = struct( ...
+            'subbandMHz',           subbandMHz, ...
+            'bandwidthMHz',         subbandBwMHz, ...
+            'sectorEirpDbm',        params.sectorEirpDbm, ...
+            'peakCompositeGainDbi', getOpt(params, 'peakGainDbi', NaN));
+    end
+
     tStart = tic;
     [hWaitbar_ml_mc_chunks,hWaitbarMsgQueue_ml_mc_chunks]= ParForWaitbarCreateMH_time('Number of MC: ',numMc);    %%%%%%% Create ParFor Waitbar, this one covers points and chunks
     for it = 1:numMc
@@ -865,6 +970,18 @@ function out = runR23AasEirpCdfGrid(varargin)
             azGrid, elGrid, beams, params, sectorOpts);
 
         stats = update_eirp_histograms(stats, sectorOut.aggregateEirpDbm);
+
+        % ---- optional per-subband / narrowband EIRP density ----------
+        % Gated on opts.subband.enable. Uses the SAME per-draw beam set the
+        % band-integrated path used (post layering / prbWeighting), but
+        % evaluates every beam at the FULL sector EIRP (no power split) so a
+        % narrowband victim sees the best-aligned beam at full EPRE. Accumulates
+        % into its OWN streaming histogram; `stats` is NOT touched. No RNG.
+        if subbandEnabled
+            subDraw = imtAasSubbandEnvelope(azGrid, elGrid, beams, params, subbandCfg);
+            subbandStats = update_eirp_histograms(subbandStats, ...
+                subDraw.perSubbandDensityEnvelope_dBmPerMHz);
+        end
 
         if computeGain
             % Unit-agnostic accumulator over dBi values (max-over-beams
@@ -1469,6 +1586,88 @@ function out = runR23AasEirpCdfGrid(varargin)
         out.metadata.includesPrbWeighting = false;
     end
 
+    % ---- optional per-subband / narrowband EIRP density (SEPARATE) ---
+    % Attaches NEW output fields only. The per-subband density was
+    % accumulated into its OWN streaming histogram (subbandStats) inside the
+    % loop; the band-integrated `stats` / percentileMaps / self-check are
+    % untouched and byte-identical to a no-subband run for a fixed seed. The
+    % headline delta is MEASURED from the observed per-subband peak vs the
+    % nominal single-served-beam band-integrated density (overlap-immune) and
+    % labelled alongside the nominal 10*log10(N). When off, out.subband = [] and
+    % metadata.includesSubband = false.
+    if subbandEnabled
+        subbandStats.mean_lin_mW = subbandStats.sum_lin_mW ./ max(subbandStats.numMc, 1);
+        subbandStats.mean_dBm    = 10 .* log10(subbandStats.mean_lin_mW);
+        subPmaps = eirp_percentile_maps(subbandStats, subbandPercentiles);
+        subPmaps.units = 'dBm/MHz';
+
+        % Headline scalars. The theoretical peak density is exact. The
+        % measured delta compares the OBSERVED per-subband peak density (best
+        % beam at full EPRE, ~ sectorEirp - 10*log10(BW) minus a tiny
+        % grid-miss) against the band-integrated density a narrowband victim
+        % would see from ONE served beam at a beam center (the nominal
+        % per-beam split, perBeamPeakEirpDbm - 10*log10(BW)). This reference
+        % is immune to occasional two-beam overlaps inflating the observed
+        % band-integrated aggregate maximum, yet still captures the real
+        % (tiny, over many draws) grid-miss, so deltaMeasured ~ 10*log10(N).
+        perSubbandPeak_dBmPerMHz = params.sectorEirpDbm - subbandBandOff;
+        subMaxVal = max(subbandStats.max_dBm(:));
+        if ~isfinite(subMaxVal)
+            deltaMeasured_dB = NaN;
+        else
+            bandServedBeamDensity_dBmPerMHz = perBeamPeakEirpDbm - subbandBandOff;
+            deltaMeasured_dB = subMaxVal - bandServedBeamDensity_dBmPerMHz;
+        end
+        deltaNominal_dB = 10 * log10(numBeams);
+
+        subband = struct();
+        subband.subbandMHz                = double(subbandMHz);
+        subband.perSubbandPeak_dBmPerMHz  = perSubbandPeak_dBmPerMHz;
+        subband.deltaVsBandIntegrated_dB  = deltaMeasured_dB;
+        subband.deltaNominal_dB           = deltaNominal_dB;
+        subband.percentileMaps            = subPmaps;
+        subband.stats                     = subbandStats;
+        % Validity bound uses N = numUesPerSector (co-scheduled UEs).
+        boundMHz = subbandBwMHz / max(numBeams, 1);
+        subband.validity = struct( ...
+            'subbandMHz',                   double(subbandMHz), ...
+            'bandwidthMHz',                 subbandBwMHz, ...
+            'numBeams',                     numBeams, ...
+            'singleBeamPerSubbandBoundMHz', boundMHz, ...
+            'spansMultipleUeAllocations',   double(subbandMHz) > boundMHz + 1e-12, ...
+            'note', ['single-beam worst case valid when subbandMHz <= ', ...
+                     'bandwidthMHz / numBeams; above the bound the sub-band ', ...
+                     'spans >1 UE allocation and the worst case is optimistic.']);
+        subband.config = struct( ...
+            'subbandMHz',           double(subbandMHz), ...
+            'bandwidthMHz',         subbandBwMHz, ...
+            'percentiles',          subbandPercentiles, ...
+            'sectorEirpDbm',        params.sectorEirpDbm, ...
+            'peakCompositeGainDbi', getOpt(params, 'peakGainDbi', NaN), ...
+            'numBeams',             numBeams, ...
+            'binEdges',             subbandEdges);
+        subband.notes = ['Narrowband (per-subband) worst-case EIRP DENSITY ', ...
+            '[dBm/MHz], a SEPARATE view from the band-integrated ITU result ', ...
+            '(which remains THE reference and is byte-identical when this ', ...
+            'layer is off). One beam per occupied sub-band at full EPRE under ', ...
+            'a frequency-division assumption, so the density is ~10*log10(N) ', ...
+            'above the band-integrated dBm/MHz density at a beam center. ', ...
+            'Power-split-independent (depends only on beam directions; ', ...
+            'unaffected by opts.prbWeighting / the opts.layering power split). ', ...
+            'NOT additive with the band-integrated dBm/MHz CDF. Statistical ', ...
+            'model consistent with the TS 38.214 framework, NOT a normative ', ...
+            'scheduling result.'];
+        subband.specReference = ['3GPP TS 38.214 V19.2.0 Clause 5.1.2.2 ', ...
+            '(PDSCH frequency-domain resource allocation), Clause 5.1.2.3 ', ...
+            '(PRB bundling / PRG), Clause 4.1 (downlink EPRE).'];
+        out.subband = subband;
+        out.metadata.includesSubband = true;
+        out.metadata.subbandConfig   = subband.config;
+    else
+        out.subband = [];
+        out.metadata.includesSubband = false;
+    end
+
     % ---- optional CSV export ----------------------------------------
     if ~isempty(opts.outputCsvPath)
         out.percentileTable = export_eirp_percentile_table( ...
@@ -2033,6 +2232,27 @@ function prbWeighting = resolvePrbWeightingOpts(raw)
         prbWeighting.enable = true;
     end
     prbWeighting.enable = logical(prbWeighting.enable);
+end
+
+function subband = resolveSubbandOpts(raw)
+%RESOLVESUBBANDOPTS Read + normalize the optional opts.subband struct.
+%   [] / absent -> struct('enable', false) (the per-subband / narrowband
+%   density layer is OFF and every existing output is byte-identical for a
+%   fixed seed; no extra RNG is drawn and the band-integrated path is never
+%   touched). A struct presence enables the layer; opts.subband.enable
+%   defaults to true when the struct is supplied. The subbandMHz field
+%   validation itself is performed downstream by imtAasSubbandEnvelope.
+    subband = struct('enable', false);
+    if isempty(raw); return; end
+    if ~isstruct(raw)
+        error('runR23AasEirpCdfGrid:badSubbandOpts', ...
+            'opts.subband must be a struct (or empty).');
+    end
+    subband = raw;
+    if ~isfield(subband, 'enable') || isempty(subband.enable)
+        subband.enable = true;
+    end
+    subband.enable = logical(subband.enable);
 end
 
 function frame = resolveOutputFrame(opts)
