@@ -14,6 +14,13 @@ function results = test_r23_golden_reference()
 %     G6. golden_manifest.json carries the regression-anchor fields
 %         (goldenReferenceName, goldenReferenceVersion,
 %         expectedSelfCheckStatus, expectedObservedMaxGridEirp_dBm).
+%     G7. verifyR23GoldenReference passes against the tracked panel-frame
+%         golden ("r23-urban-panelframe-small-grid-v1").
+%     G8. verifyR23GoldenReference passes against the tracked CTIA-1x6
+%         golden ("r23-ctia-1x6-small-grid-v1").
+%     G9. the panel-frame and CTIA goldens are each DISTINCT from the
+%         urban baseline golden (proves the outputFrame / aasGeometryPreset
+%         run-options actually took effect rather than being ignored).
 %
 %   Antenna-face EIRP only -- no new modeling capability is exercised.
 
@@ -26,6 +33,9 @@ function results = test_r23_golden_reference()
     results = g4_verifier_passes(results);
     results = g5_verifier_handles_missing_dir(results);
     results = g6_manifest_has_required_fields(results);
+    results = g7_panelframe_verifier_passes(results);
+    results = g8_ctia_1x6_verifier_passes(results);
+    results = g9_anchors_are_distinct(results);
 
     fprintf('\n--- test_r23_golden_reference summary ---\n');
     for k = 1:numel(results.summary)
@@ -163,7 +173,74 @@ function r = g6_manifest_has_required_fields(r)
     r = recordResult(r, ok, msg);
 end
 
+function r = g7_panelframe_verifier_passes(r)
+    s = warning('off', 'runR23AasEirpCdfGrid:powerSelfCheckWarn');
+    cleanup = onCleanup(@() warning(s)); %#ok<NASGU>
+    res = verifyR23GoldenReference('r23-urban-panelframe-small-grid-v1');
+    ok = logical(res.passed);
+    nDiffs = numel(res.differences);
+    msg = sprintf(['G7: verifier passes against tracked panel-frame ' ...
+                   'golden (passed=%d, %d compared fields)'], ...
+                   double(ok), nDiffs);
+    r = recordResult(r, ok, msg);
+end
+
+function r = g8_ctia_1x6_verifier_passes(r)
+    s = warning('off', 'runR23AasEirpCdfGrid:powerSelfCheckWarn');
+    cleanup = onCleanup(@() warning(s)); %#ok<NASGU>
+    res = verifyR23GoldenReference('r23-ctia-1x6-small-grid-v1');
+    ok = logical(res.passed);
+    nDiffs = numel(res.differences);
+    msg = sprintf(['G8: verifier passes against tracked CTIA-1x6 ' ...
+                   'golden (passed=%d, %d compared fields)'], ...
+                   double(ok), nDiffs);
+    r = recordResult(r, ok, msg);
+end
+
+function r = g9_anchors_are_distinct(r)
+    % Load the three manifests and confirm the panel-frame and CTIA
+    % goldens each differ from the urban baseline golden. Without this a
+    % no-op bug (outputFrame / aasGeometryPreset silently ignored) would
+    % freeze three identical artifacts and still let G7/G8 pass.
+    urbanMax = goldenManifestMaxEirp('r23_urban_baseline_small_grid_v1');
+    panelMax = goldenManifestMaxEirp('r23_urban_panelframe_small_grid_v1');
+    ctiaMax  = goldenManifestMaxEirp('r23_ctia_1x6_small_grid_v1');
+
+    haveAll = ~isnan(urbanMax) && ~isnan(panelMax) && ~isnan(ctiaMax);
+    panelDistinct = haveAll && abs(panelMax - urbanMax) > 1e-6;
+    ctiaDistinct  = haveAll && abs(ctiaMax  - urbanMax) > 1e-6;
+    ok = haveAll && panelDistinct && ctiaDistinct;
+    msg = sprintf(['G9: anchors distinct from urban baseline ' ...
+                   '(urban=%.6g, panel=%.6g, ctia=%.6g; ' ...
+                   'panelDistinct=%d, ctiaDistinct=%d)'], ...
+                   urbanMax, panelMax, ctiaMax, ...
+                   double(panelDistinct), double(ctiaDistinct));
+    r = recordResult(r, ok, msg);
+end
+
 % =====================================================================
+
+function v = goldenManifestMaxEirp(subdir)
+%GOLDENMANIFESTMAXEIRP Read expectedObservedMaxGridEirp_dBm from a manifest.
+%   Returns NaN when the manifest is missing or the field is absent.
+    v = NaN;
+    manifestPath = fullfile(goldenDirFor(subdir), 'golden_manifest.json');
+    if exist(manifestPath, 'file') ~= 2
+        return;
+    end
+    fid = fopen(manifestPath, 'r');
+    if fid < 0, return; end
+    cleanup = onCleanup(@() fclose(fid)); %#ok<NASGU>
+    raw = fread(fid, Inf, 'uint8=>char').';
+    try
+        m = jsondecode(raw);
+    catch
+        return;
+    end
+    if isstruct(m) && isfield(m, 'expectedObservedMaxGridEirp_dBm')
+        v = double(m.expectedObservedMaxGridEirp_dBm);
+    end
+end
 
 function p = goldenDirFor(subdir)
     here = fileparts(mfilename('fullpath'));

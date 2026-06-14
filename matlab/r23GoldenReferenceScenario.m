@@ -19,6 +19,21 @@ function params = r23GoldenReferenceScenario(name)
 %           urban-baseline preset, seed=20260101, numSnapshots=20,
 %           az=-60:20:60, el=-10:2:0,
 %           percentiles=[1 5 10 20 50 80 90 95 99].
+%           goldenRunOptions = struct() (default path, codebook off).
+%
+%       "r23-urban-panelframe-small-grid-v1"
+%           identical sim config to the urban baseline, but run with
+%           goldenRunOptions = struct('outputFrame','panel') so the
+%           flat null-band panel frame is exercised (codebook off).
+%
+%       "r23-ctia-1x6-small-grid-v1"
+%           identical sim config to the urban baseline, but run with
+%           goldenRunOptions = struct('aasGeometryPreset','ctia_7ghz_1x6')
+%           so the CTIA 7 GHz 1x6 geometry is exercised (codebook off).
+%
+%   Every returned scenario carries params.metadata.goldenRunOptions: a
+%   struct of extra flat name-value opts the verifier must apply when
+%   running this golden (empty struct() means "run with no extra opts").
 %
 %   Antenna-face EIRP only -- does not introduce path loss, clutter,
 %   rooftop modeling, receiver, I/N, propagation, coordination
@@ -49,11 +64,45 @@ function params = r23GoldenReferenceScenario(name)
             params.sim.azGrid_deg   = -60:20:60;
             params.sim.elGrid_deg   = -10:2:0;
             params.sim.percentiles  = [1 5 10 20 50 80 90 95 99];
+            % Default path: no extra run-time opts, codebook off. Keeping
+            % this empty preserves the byte-identical run that the v1
+            % urban golden was frozen from.
+            goldenRunOptions = struct();
+
+        case 'r23-urban-panelframe-small-grid-v1'
+            % Identical sim config to the urban baseline; the only
+            % difference is the run-time option that selects the flat
+            % null-band panel frame. Codebook stays off.
+            canonicalName    = 'r23-urban-panelframe-small-grid-v1';
+            goldenVersion    = 1;
+            params           = r23ScenarioPreset('urban-baseline');
+            params.sim.randomSeed   = 20260101;
+            params.sim.numSnapshots = 20;
+            params.sim.azGrid_deg   = -60:20:60;
+            params.sim.elGrid_deg   = -10:2:0;
+            params.sim.percentiles  = [1 5 10 20 50 80 90 95 99];
+            goldenRunOptions = struct('outputFrame', 'panel');
+
+        case 'r23-ctia-1x6-small-grid-v1'
+            % Identical sim config to the urban baseline; the only
+            % difference is the run-time geometry preset (CTIA 1x6).
+            % Codebook stays off.
+            canonicalName    = 'r23-ctia-1x6-small-grid-v1';
+            goldenVersion    = 1;
+            params           = r23ScenarioPreset('urban-baseline');
+            params.sim.randomSeed   = 20260101;
+            params.sim.numSnapshots = 20;
+            params.sim.azGrid_deg   = -60:20:60;
+            params.sim.elGrid_deg   = -10:2:0;
+            params.sim.percentiles  = [1 5 10 20 50 80 90 95 99];
+            goldenRunOptions = struct('aasGeometryPreset', 'ctia_7ghz_1x6');
 
         otherwise
             error('r23GoldenReferenceScenario:unknownGolden', ...
                 ['Unknown golden reference "%s". Supported names: ' ...
-                 '"r23-urban-baseline-small-grid-v1".'], name);
+                 '"r23-urban-baseline-small-grid-v1", ' ...
+                 '"r23-urban-panelframe-small-grid-v1", ' ...
+                 '"r23-ctia-1x6-small-grid-v1".'], name);
     end
 
     if ~isfield(params, 'metadata') || ~isstruct(params.metadata)
@@ -62,4 +111,5 @@ function params = r23GoldenReferenceScenario(name)
     params.metadata.goldenReferenceName    = canonicalName;
     params.metadata.goldenReferenceVersion = goldenVersion;
     params.metadata.goldenReferencePurpose = 'regression-anchor';
+    params.metadata.goldenRunOptions       = goldenRunOptions;
 end
