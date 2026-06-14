@@ -144,6 +144,46 @@ fixed seed (`test_runR23AasEirpCdfGrid_ssb` enforces this). The traffic
 This is a broadcast duty-cycle model, distinct from the per-UE PMI
 codebook selection in `opts.beamSelection = 'codebook'`.
 
+## Per-RE EPRE option (`opts.epre`) — separate per-RE density, never the baseline
+
+`runR23AasEirpCdfGrid` has an optional, **default-off** per-RE EPRE-offset
+layer driven by the nested `opts.epre` struct. It applies the 3GPP **TS
+38.214 V19.2.0 Clause 4.1** downlink per-resource-element EPRE offsets —
+DM-RS power boost (Table 4.1-1), optional PT-RS power boost (Tables 4.1-2 /
+4.1-2A), and the CSI-RS-vs-SSB `powerControlOffsetSS` — implemented by two
+one-function-per-file modules with no new antenna math:
+
+- `imtAasEpreOffsets.m` — pure, deterministic Clause 4.1 table lookup
+  returning `dmrsBoostDb`, `ptrsBoostDb`, `csirsOffsetDb`,
+  `hottestBoostDb = max(dmrsBoostDb, ptrsBoostDb)`, plus a resolved config
+  and `specReference`. No antenna math, no RNG.
+- `imtAasApplyEpreEnvelope.m` — reads the streaming `stats` **read-only** and
+  returns the per-RE worst-case envelope
+  `perRePeakEnvelope_dBm = stats.max_dBm + hottestBoostDb`, optional
+  per-RE-envelope percentile maps (computed on a COPY of `stats` whose bin
+  edges are shifted by `hottestBoostDb`), and a CSI-RS-class envelope when a
+  sweep envelope is supplied.
+
+**Hard invariant: `opts.epre` never mutates `stats`, `percentileMaps`,
+`selfCheck`, or the `opts.ssb` outputs.** DM-RS / PT-RS boosts are
+**power-conserving over a slot and over the channel bandwidth**: they do
+**NOT** raise the band-integrated EIRP in dBm/100 MHz and are deliberately
+kept off the band-integrated CDF and out of the band-integrated sector-peak
+self-check. The layer runs *after* the streaming aggregator, the power
+self-check, and the SSB sweep, and attaches only NEW fields (`out.epre`,
+`out.metadata.includesEpre` / `.epreConfig`). When `opts.epre` is
+absent/`[]`, `out.epre = []` and every existing output is byte-identical to
+before for a fixed seed (`test_runR23AasEirpCdfGrid_epre` enforces this).
+
+The **ITU band-integrated result (78.3 dBm/100 MHz sector EIRP) is and
+remains the baseline.** `out.epre.perRePeakEnvelope_dBm` is a **separate**
+per-RE EIRP **density** worst case: it is **NOT additive with the
+band-integrated dBm/MHz CDF**, it is **allowed to exceed** the 78.3 dBm
+band-integrated sector peak by design, and it is **not** clamped to it nor
+fed into the band-integrated self-check. This is distinct from the
+`opts.ssb` broadcast duty-cycle model and the `opts.beamSelection` codebook
+path.
+
 ## Angle conventions (matched to pycraf and M.2101)
 
 - External `azim ∈ [-180°, 180°]`, `elev ∈ [-90°, 90°]`
