@@ -87,9 +87,21 @@ function result = verifyR23GoldenReference(name, varargin)
     % ---- rebuild and run the golden scenario ------------------------
     params = r23GoldenReferenceScenario(name);
 
+    % Some goldens pin a non-default run-time configuration (e.g. the
+    % panel output frame, or a non-default AAS geometry preset). The
+    % scenario records these as params.metadata.goldenRunOptions; we
+    % replay them as trailing name-value pairs. When the field is absent
+    % or empty the call is byte-identical to runR23AasEirpCdfGrid(params),
+    % which keeps the v1 urban golden run unchanged.
+    nv = goldenRunOptionsCell(params);
+
     s = warning('off', 'runR23AasEirpCdfGrid:powerSelfCheckWarn');
     cleanup = onCleanup(@() warning(s)); %#ok<NASGU>
-    out = runR23AasEirpCdfGrid(params);
+    if isempty(nv)
+        out = runR23AasEirpCdfGrid(params);
+    else
+        out = runR23AasEirpCdfGrid(params, nv{:});
+    end
 
     % Build a fresh snapshot in a temp dir; we read the same files the
     % tracked artifact would have, which keeps the comparison honest.
@@ -164,6 +176,27 @@ function result = verifyR23GoldenReference(name, varargin)
 end
 
 % =====================================================================
+
+function nv = goldenRunOptionsCell(params)
+%GOLDENRUNOPTIONSCELL Flatten params.metadata.goldenRunOptions to {n,v,...}.
+%   Returns {} when the field is absent / empty so the caller runs the
+%   scenario with no extra opts (byte-identical to the historical path).
+    nv = {};
+    if ~isfield(params, 'metadata') || ~isstruct(params.metadata) || ...
+            ~isfield(params.metadata, 'goldenRunOptions')
+        return;
+    end
+    ro = params.metadata.goldenRunOptions;
+    if ~isstruct(ro) || isempty(fieldnames(ro))
+        return;
+    end
+    fn = fieldnames(ro);
+    nv = cell(1, 2 * numel(fn));
+    for k = 1:numel(fn)
+        nv{2*k-1} = fn{k};
+        nv{2*k}   = ro.(fn{k});
+    end
+end
 
 function v = obsMaxPercentile(out)
     v = NaN;
