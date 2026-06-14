@@ -35,6 +35,14 @@ function results = test_activity_weighted_cdf()
 %        networkLoadingFactor=1.5, or tddActivityFactor=-0.1 all error
 %        with the specific 'runR23AasEirpCdfGrid:badActivityFactor' id.
 %
+%   T10. Validation: activityWeightedCdf=true with a bad activityModel
+%        (out-of-set string or non-char) errors with the specific
+%        'runR23AasEirpCdfGrid:invalidActivityModel' id.
+%   T11. Validation: activityWeightedCdf=true with a bad
+%        activityOffFloorUses (out-of-set string or non-char), with
+%        activityModel at its default, errors with the specific
+%        'runR23AasEirpCdfGrid:invalidActivityOffFloorUses' id.
+%
 %   Returns struct with .passed (logical) and .summary (cellstr).
 
     results.summary = {};
@@ -231,6 +239,24 @@ function results = test_activity_weighted_cdf()
         ['T9: frame model + no SSB -> activityFrameNoSweepFloor warning, ', ...
          'p=alphaUe=%.4f, scalar -Inf off floor (warn=%d p=%d fall=%d)'], ...
         AWg.activeFraction, okWarn, okPg, okFall));
+
+    % ---- T10: validateActivityModel rejects a bad activityModel -----
+    badModelId = 'runR23AasEirpCdfGrid:invalidActivityModel';
+    ok10 = throwsId(@() runR23AasEirpCdfGrid(mergeOpts(baseOpts, ...
+            struct('activityWeightedCdf',true,'activityModel','bogus'))), badModelId) && ...
+           throwsId(@() runR23AasEirpCdfGrid(mergeOpts(baseOpts, ...
+            struct('activityWeightedCdf',true,'activityModel',5))), badModelId);
+    results = check(results, ok10, ...
+        'T10: bad activityModel (out-of-set + non-char) throws runR23AasEirpCdfGrid:invalidActivityModel');
+
+    % ---- T11: validateActivityOffFloorUses rejects a bad value ------
+    badFloorId = 'runR23AasEirpCdfGrid:invalidActivityOffFloorUses';
+    ok11 = throwsId(@() runR23AasEirpCdfGrid(mergeOpts(baseOpts, ...
+            struct('activityWeightedCdf',true,'activityOffFloorUses','bogus'))), badFloorId) && ...
+           throwsId(@() runR23AasEirpCdfGrid(mergeOpts(baseOpts, ...
+            struct('activityWeightedCdf',true,'activityOffFloorUses',5))), badFloorId);
+    results = check(results, ok11, ...
+        'T11: bad activityOffFloorUses (out-of-set + non-char) throws runR23AasEirpCdfGrid:invalidActivityOffFloorUses');
 
     fprintf('\n--- test_activity_weighted_cdf summary ---\n');
     for k = 1:numel(results.summary)
