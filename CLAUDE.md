@@ -184,6 +184,69 @@ fed into the band-integrated self-check. This is distinct from the
 `opts.ssb` broadcast duty-cycle model and the `opts.beamSelection` codebook
 path.
 
+## Rank / MU-MIMO layering option (`opts.layering`) — reshapes the CDF; ITU rank-1 is the baseline
+
+`runR23AasEirpCdfGrid` has an optional, **default-off** rank / MU-MIMO
+layering layer driven by the nested `opts.layering` struct. It replaces the
+implicit "N beams = N rank-1 UEs, each at `sectorEirp − 10·log10(N)`"
+assumption with a **rank / MU-MIMO layering** model consistent with the
+3GPP **TS 38.214 V19.2.0** framework (Clause 5.1.1.1 transmission scheme 1
+up to 8 layers on ports 1000-1023; Clause 5.1.6.2 DM-RS port bound; Clause
+5.2.2.5.1 RI/rank reporting; Clause 5.2.2.2.x PMI codebook / CSI-RS port
+bound). Implemented by one new one-function-per-file module that reuses the
+existing antenna engine — **no new antenna math**:
+
+- `imtAasExpandUeLayers.m` — expands the N-UE beam set from
+  `imtAasGenerateBeamSet` into an `L = Σ r_u` layer beam set. Each UE is
+  served with a rank `r_u` (fixed, or drawn from a rank PMF); `L` is capped
+  at `maxTotalLayers` (default 8) via a `greedy` clip rule; the `r_u > 1`
+  layers sit in a small Gaussian angular cone (`layerSpreadDeg`, default
+  2°) around the UE direction, clamped to the steering envelope via
+  `imtAasApplyBeamLimits`. The per-layer power split
+  (`sectorEirp − 10·log10(L)`) and the **incoherent linear-mW** sum fall out
+  automatically in `imtAasSectorEirpGridFromBeams` from `numel(steerAzDeg)`.
+
+**Unlike `opts.epre`** (a post-hoc per-RE envelope that never touches the
+band-integrated CDF), `opts.layering` changes the **per-draw beam set**, so
+when enabled it **does reshape `stats` / `percentileMaps` / the EIRP CDF** —
+that is the point. It is an explicitly-labelled **alternative scenario** for
+sensitivity, not the new default.
+
+**Hard invariants (enforced by `test_imtAasExpandUeLayers` and
+`test_runR23AasEirpCdfGrid_layering`):**
+
+- **Byte-identical when off.** When `opts.layering` is absent/`[]` (or
+  `enable=false`), `imtAasExpandUeLayers` is **not called at all** → zero
+  extra RNG → `stats`, `percentileMaps`, `selfCheck`, `out.ssb`, `out.epre`
+  are byte-identical to before for a fixed seed. `out.layering = []`,
+  `out.metadata.includesLayering = false`.
+- **Rank 1 + `layerSpreadDeg` 0 == off.** Enabling with a fixed rank of 1
+  and zero spread is an **identity expansion**: it returns the UE directions
+  unchanged and consumes **zero RNG**, so the traffic `stats` are
+  byte-identical to the off case. (A *fixed* rank consumes no RNG; a rank
+  PMF draws one rank per UE; spread offsets draw only when `sigma > 0`.)
+- **Power conserved.** `L` layers at `sectorEirp − 10·log10(L)` sum to
+  `sectorEirp`, so the band-integrated sector peak and the power self-check
+  are unchanged in **bound** (the observed aggregate max stays
+  `≤ sectorEirp`); only the **spatial distribution** of where the power
+  lands changes. The traffic `stats` struct (including `stats.max_dBm`)
+  feeds the self-check exactly as before.
+
+The **ITU M.2101 reference remains the baseline.** The ITU assumption (IMT
+characteristics Table A-2, Note 1: "the AAS BS beamforms towards each UE
+using the entire array", 3 UEs, equal split) is exactly the current default
+— 3 UEs, rank-1 each, equal power split — and is recovered by leaving
+`opts.layering` off. The scheduler / rank / power-split model is
+**statistical** (gNB co-scheduling, power split and rank selection are
+implementation-defined in TS 38.214), **not a normative 38.214 algorithm**;
+the SU-MIMO layer angular spread is a stand-in for channel angular spread
+(no channel model). With layering on, the scalar
+`metadata.perBeamPeakEirpDbm` (computed pre-loop from the fixed `N`) is no
+longer the realized per-layer power — the realized distribution is surfaced
+in `out.layering.perLayerPeakEirpDbm`. This is distinct from the `opts.ssb`
+broadcast duty-cycle model, the `opts.epre` per-RE density, and the
+`opts.beamSelection` codebook path.
+
 ## Angle conventions (matched to pycraf and M.2101)
 
 - External `azim ∈ [-180°, 180°]`, `elev ∈ [-90°, 90°]`
