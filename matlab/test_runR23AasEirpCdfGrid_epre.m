@@ -23,6 +23,8 @@ function results = test_runR23AasEirpCdfGrid_epre()
 %       T5.  opts.ssb + opts.epre both on -> the opts.ssb outputs
 %            (out.ssb / out.timeWeighted) are byte-identical to an
 %            opts.ssb-only run with the same seed.
+%       T6.  resolveEpreOpts error path: a non-struct, non-empty opts.epre
+%            is rejected with 'runR23AasEirpCdfGrid:badEpreOpts'.
 %
 %   Returns struct with .passed (logical) and .summary (cellstr).
 
@@ -127,6 +129,14 @@ function results = test_runR23AasEirpCdfGrid_epre()
     results = check(results, ok5, ...
         'T5: opts.ssb outputs byte-identical with opts.epre also on (and EPRE attached)');
 
+    % ---- T6: resolveEpreOpts rejects a non-struct, non-empty opts.epre --
+    badEpre = baseOpts;
+    badEpre.epre = 5;   % non-struct, non-empty -> badEpreOpts
+    ok6 = throwsId(@() runR23AasEirpCdfGrid(badEpre), ...
+        'runR23AasEirpCdfGrid:badEpreOpts');
+    results = check(results, ok6, ...
+        'T6: non-struct opts.epre throws runR23AasEirpCdfGrid:badEpreOpts');
+
     fprintf('\n--- test_runR23AasEirpCdfGrid_epre summary ---\n');
     for k = 1:numel(results.summary)
         fprintf('  %s\n', results.summary{k});
@@ -146,4 +156,13 @@ end
 
 function s = ifElse(cond, a, b)
     if cond, s = a; else, s = b; end
+end
+
+function tf = throwsId(fn, id)
+    tf = false;
+    try
+        fn();
+    catch err
+        tf = strcmp(err.identifier, id);
+    end
 end
