@@ -32,7 +32,9 @@ function out = runR23AasEirpCdfGrid(varargin)
 %        opts.computePointingHistogram, opts.pointingAzBinEdgesDeg,
 %        opts.pointingElBinEdgesDeg,
 %        opts.clampElevation, opts.beamSelection, opts.codebookOversample,
-%        opts.outputDomain, opts.gainBinEdgesDbi.
+%        opts.outputDomain, opts.gainBinEdgesDbi,
+%        opts.activityWeightedCdf, opts.tddActivityFactor,
+%        opts.networkLoadingFactor, opts.activityOffFloorDbm.
 %      The flat OPTS struct also accepts the same AAS geometry fields as
 %      the name-value form:
 %        opts.aasGeometryPreset,
@@ -139,6 +141,34 @@ function out = runR23AasEirpCdfGrid(varargin)
 %       boosted RE) and is not clamped to it. See imtAasEpreOffsets and
 %       imtAasApplyEpreEnvelope.
 %
+%   Activity-weighted EIRP CDF layer (non-breaking; default OFF):
+%       opts.activityWeightedCdf (logical, default false) -> EXPLICIT
+%           trigger. When false (default), out.activityWeightedPercentileMaps
+%           is [] and every existing output is byte-identical for a fixed
+%           seed (the layer is computed post-hoc and adds no RNG draws).
+%       When true, a STATISTICAL "% of time" activity-weighted EIRP CDF-grid
+%       is derived from the always-on histogram in stats by treating
+%           p = tddActivityFactor * networkLoadingFactor
+%       as a PROBABILITY OF TRANSMISSION (M.2101-style activity factor): the
+%       sector radiates at its FULL peak EIRP a fraction p of the time and
+%       is off the rest. This reshapes the CDF (correct for a "% of time"
+%       exceedance criterion) and is NOT a flat dB power-reduction offset --
+%       it does not shift the whole distribution down. The requested output
+%       percentile Pout maps to the always-on percentile
+%           Pon = 100 - (100 - Pout) / p
+%       (exact under eirp_percentile_maps); requested percentiles in the off
+%       region (Pon < 0, i.e. Pout <= 100*(1-p)) take opts.activityOffFloorDbm.
+%       p = 1 reproduces the raw percentileMaps exactly. p is geometry-
+%       independent, so this works for every aasGeometryPreset.
+%       Fields (all default to nestedParams.bs / -Inf):
+%           opts.tddActivityFactor    finite scalar in (0,1] (default 0.75)
+%           opts.networkLoadingFactor finite scalar in (0,1] (default 0.20;
+%               the ITU example overrides to 0.25 -> p = 0.1875)
+%           opts.activityOffFloorDbm  off-region percentile value (default
+%               -Inf). Validated only when activityWeightedCdf is true.
+%       The raw percentileMaps remain the always-on PEAK distribution; the
+%       gain maps are NOT affected.
+%
 %   Power semantics (R23 macro 7.125-8.4 GHz):
 %       maxEirpPerSector_dBm = 78.3   sector peak EIRP [dBm / 100 MHz]
 %       conductedPower_dBm   = 46.1   conducted BS power [dBm / 100 MHz]
@@ -166,6 +196,18 @@ function out = runR23AasEirpCdfGrid(varargin)
 %       .gainPercentileMaps gain percentile maps (.values in dBi). Always
 %                           present; .values is empty unless gain was
 %                           computed. See opts.outputDomain.
+%       .activityWeightedPercentileMaps  STATISTICAL "% of time" activity-
+%                           weighted EIRP percentile maps (opt-in only; []
+%                           unless opts.activityWeightedCdf). Same shape as
+%                           percentileMaps with .values Naz x Nel x P in
+%                           dBm/100MHz, plus .activeFraction (p),
+%                           .tddActivityFactor, .networkLoadingFactor,
+%                           .onPercentileEquivalent (Pon), .inOnRegion,
+%                           .offFloorDbm and .note. The raw percentileMaps
+%                           remain the always-on peak distribution; gain
+%                           maps are unaffected. This is the probability-of-
+%                           transmission model (p = tdd*load), distinct from
+%                           a flat dB offset. See opts.activityWeightedCdf.
 %       .pointing           pointing-angle aggregator (when computed):
 %                             .azimuthDegGrid       Naz x Nel [deg]
 %                             .elevationDegGrid     Naz x Nel [deg]
@@ -369,6 +411,26 @@ function out = runR23AasEirpCdfGrid(varargin)
     % the EPRE layer only adds a SEPARATE per-RE worst-case density
     % envelope and never mutates the band-integrated path.
     opts.epre = resolveEpreOpts(getOpt(opts, 'epre', []));
+
+    % ---- activity-weighted EIRP CDF option (non-breaking; default OFF)
+    % opts.activityWeightedCdf absent/false -> disabled, and stats /
+    % percentileMaps / gainPercentileMaps / pointing / timeWeighted are
+    % byte-identical for a fixed seed. When true, a STATISTICAL activity-
+    % weighted EIRP CDF-grid is computed post-hoc from the always-on
+    % histogram by treating p = tddActivityFactor * networkLoadingFactor as
+    % a PROBABILITY OF TRANSMISSION (M.2101-style activity factor): the
+    % sector radiates at its FULL peak EIRP a fraction p of the time and is
+    % off the rest. This reshapes the CDF (correct for a "% of time"
+    % exceedance criterion) and is NOT a flat dB power-reduction offset. p
+    % is geometry-independent, so this applies to any aasGeometryPreset.
+    opts.activityWeightedCdf  = getOpt(opts, 'activityWeightedCdf', false);
+    opts.tddActivityFactor    = getOpt(opts, 'tddActivityFactor',    nestedParams.bs.tddActivityFactor);
+    opts.networkLoadingFactor = getOpt(opts, 'networkLoadingFactor', nestedParams.bs.networkLoadingFactor);
+    opts.activityOffFloorDbm  = getOpt(opts, 'activityOffFloorDbm',  -Inf);
+    if opts.activityWeightedCdf
+        validateActivityFactor(opts.tddActivityFactor,    'tddActivityFactor');
+        validateActivityFactor(opts.networkLoadingFactor, 'networkLoadingFactor');
+    end
 
     % ---- propagate maxEirpPerSector override into params ------------
     if isnumeric(opts.maxEirpPerSector_dBm) && isscalar(opts.maxEirpPerSector_dBm) ...
@@ -629,6 +691,40 @@ function out = runR23AasEirpCdfGrid(varargin)
     pmaps = eirp_percentile_maps(stats, opts.percentiles);
     toc;
 
+    % ---- activity-weighted EIRP percentile maps (opt-in only) --------
+    % Statistical "% of time" activity model computed POST-HOC from the
+    % always-on histogram in `stats`. With p = tdd * load the unconditional
+    % CDF is  F(x) = (1-p) + p*F_on(x)  with a point mass (1-p) at "off".
+    % Solving F(x_q) = q maps the requested output percentile Pout to the
+    % always-on percentile  Pon = 100 - (100 - Pout)/p  (exact under the
+    % first-bin-where-cdf>=target lookup in eirp_percentile_maps). Requested
+    % percentiles in the off region (Pon < 0, i.e. Pout <= 100*(1-p)) take
+    % the off floor. p = 1 reproduces the raw percentileMaps exactly. This
+    % reuses the tested percentile engine on the SAME stats; no new RNG, no
+    % new percentile machinery, and stats / pmaps are never mutated.
+    if opts.activityWeightedCdf
+        p     = opts.tddActivityFactor * opts.networkLoadingFactor;   % active fraction in (0,1]
+        Pout  = opts.percentiles(:).';
+        Pon   = 100 - (100 - Pout) ./ p;
+        onMask = Pon >= 0;                                            % which requested pct are "on"
+        [NazAw, NelAw, ~] = size(pmaps.values);
+        awVals = repmat(opts.activityOffFloorDbm, NazAw, NelAw, numel(Pout)); % off-region default
+        if any(onMask)
+            onMaps = eirp_percentile_maps(stats, Pon(onMask));       % reuse tested engine
+            awVals(:, :, onMask) = onMaps.values;                    % NaN preserved for empty cells
+        end
+        awMaps = struct( ...
+            'percentiles', Pout, 'azGrid', stats.azGrid, 'elGrid', stats.elGrid, ...
+            'values', awVals, ...
+            'activeFraction', p, ...
+            'tddActivityFactor', opts.tddActivityFactor, 'networkLoadingFactor', opts.networkLoadingFactor, ...
+            'onPercentileEquivalent', Pon, 'inOnRegion', onMask, 'offFloorDbm', opts.activityOffFloorDbm, ...
+            'units', 'dBm/100MHz', ...
+            'note', ['Probability-of-transmission activity model (p = tdd*load); full peak EIRP a ' ...
+                     'fraction p of the time. Percentiles below 100*(1-p) fall in the off region. ' ...
+                     'NOT a time-average dB shift.']);
+    end
+
     % ---- gain percentile maps (only when requested) -----------------
     % Same generic percentile machinery; .values come out in dBi because
     % gainStats was accumulated over the dBi gain envelope.
@@ -706,6 +802,15 @@ function out = runR23AasEirpCdfGrid(varargin)
         metadata.peakRealizedGainDbi = max(gainMaps.values(:));
     else
         metadata.peakRealizedGainDbi = [];
+    end
+    % ---- activity-weighted CDF (additive; opt-in) ------------------
+    metadata.activityWeightedCdf   = logical(opts.activityWeightedCdf);
+    if opts.activityWeightedCdf
+        metadata.activityActiveFraction = opts.tddActivityFactor * opts.networkLoadingFactor;
+        metadata.tddActivityFactor      = opts.tddActivityFactor;
+        metadata.networkLoadingFactor   = opts.networkLoadingFactor;
+    else
+        metadata.activityActiveFraction = [];
     end
     metadata.beamSelection         = opts.beamSelection;
     metadata.beamCodebook          = params.beamCodebook;
@@ -806,6 +911,15 @@ function out = runR23AasEirpCdfGrid(varargin)
         out.gainStats          = [];
         out.gainPercentileMaps = struct('percentiles',opts.percentiles, ...
             'azGrid',azGrid, 'elGrid',elGrid, 'values',[], 'binEdges',[], 'units','dBi');
+    end
+    % ---- activity-weighted percentile maps (always present; opt-in) -
+    % Mirrors the disabled-placeholder pattern (pointing/gain): the field
+    % is always populated with a predictable shape so consumers can probe
+    % it unconditionally. Empty ([]) unless opts.activityWeightedCdf.
+    if opts.activityWeightedCdf
+        out.activityWeightedPercentileMaps = awMaps;
+    else
+        out.activityWeightedPercentileMaps = [];
     end
     out.metadata       = metadata;
 
@@ -1165,6 +1279,16 @@ function validateNumMc(N)
             N == floor(N))
         error('runR23AasEirpCdfGrid:badNumMc', ...
             'numMc / numSnapshots must be a positive integer.');
+    end
+end
+
+function validateActivityFactor(v, name)
+%VALIDATEACTIVITYFACTOR Require a finite scalar in (0,1] for the activity-
+%   weighted CDF probability factors. Only invoked when
+%   opts.activityWeightedCdf is true.
+    if ~(isnumeric(v) && isscalar(v) && isfinite(v) && v > 0 && v <= 1)
+        error('runR23AasEirpCdfGrid:badActivityFactor', ...
+            '%s must be a finite scalar in (0, 1] when activityWeightedCdf is true.', name);
     end
 end
 
