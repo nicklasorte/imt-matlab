@@ -47,6 +47,12 @@ function results = test_runR23AasEirpCdfGrid()
 %       T21. numBeams/numUesPerSector conflict: both supplied and unequal
 %            fires 'runR23AasEirpCdfGrid:numBeamsConflict' and
 %            numUesPerSector wins (out.stats.numBeams == 3).
+%       T22. writeMetadataSidecar: an unopenable opts.outputMetadataPath
+%            (pointed at an existing directory) warns
+%            'runR23AasEirpCdfGrid:cannotOpenSidecar'.
+%       T23. resolveInputs: a non-char name in a name-value name slot
+%            (struct first arg followed by a numeric) throws
+%            'runR23AasEirpCdfGrid:badNV'.
 %
 %   Returns struct with .passed (logical) and .summary (cellstr).
 
@@ -74,6 +80,8 @@ function results = test_runR23AasEirpCdfGrid()
     results = t_environment_to_deployment(results);
     results = t_bad_max_eirp(results);
     results = t_num_beams_conflict(results);
+    results = t_unopenable_sidecar_warns(results);
+    results = t_bad_name_value_name(results);
 
     fprintf('\n--- test_runR23AasEirpCdfGrid summary ---\n');
     for k = 1:numel(results.summary)
@@ -496,6 +504,38 @@ function r = t_num_beams_conflict(r)
 end
 
 % =====================================================================
+% T22: an unopenable outputMetadataPath warns cannotOpenSidecar.
+% =====================================================================
+function r = t_unopenable_sidecar_warns(r)
+    % writeMetadataSidecar mkdir()s a missing PARENT, so a nonexistent
+    % file path would just be created. Pointing outputMetadataPath at an
+    % EXISTING DIRECTORY makes fopen-for-write return -1 on all platforms
+    % (and its parent already exists, so no mkdir is attempted).
+    sidecarDir = tempname;
+    mkdir(sidecarDir);                              % existing dir -> fopen 'w' fails
+    cleanupDir = onCleanup(@() rmdirIfExists(sidecarDir)); %#ok<NASGU>
+    oMeta = smallOpts();
+    oMeta.outputMetadataPath = sidecarDir;          % point the sidecar AT a directory
+    ok22 = warnsId(@() runR23AasEirpCdfGrid(oMeta), ...
+                   'runR23AasEirpCdfGrid:cannotOpenSidecar');
+    r = check(r, ok22, ...
+        'T22: unopenable outputMetadataPath warns runR23AasEirpCdfGrid:cannotOpenSidecar');
+end
+
+% =====================================================================
+% T23: a non-char name-value name throws badNV.
+% =====================================================================
+function r = t_bad_name_value_name(r)
+    % A struct first arg is treated as flat opts; the trailing numeric
+    % lands in a name slot. extractGeometryNameValues skips a non-char
+    % name (continue), so it falls through to the badNV guard.
+    ok23 = throwsId(@() runR23AasEirpCdfGrid(struct('numMc',4), 7, 'x'), ...
+                    'runR23AasEirpCdfGrid:badNV');
+    r = check(r, ok23, ...
+        'T23: non-char name-value name throws runR23AasEirpCdfGrid:badNV');
+end
+
+% =====================================================================
 % Helpers
 % =====================================================================
 function tf = throwsId(fn, id)
@@ -508,6 +548,14 @@ function tf = throwsId(fn, id)
     end
 end
 
+function tf = warnsId(fn, id)
+%WARNSID True when FN raises a warning with the exact identifier ID.
+    prev = warning('error', id);             % promote this warning to an error
+    restore = onCleanup(@() warning(prev));  %#ok<NASGU> restore on exit
+    tf = false;
+    try, fn(); catch err, tf = strcmp(err.identifier, id); end
+end
+
 function deleteIfExists(p)
 %DELETEIFEXISTS Best-effort delete of a temp file (never raises).
     if exist(p, 'file') == 2
@@ -516,6 +564,13 @@ function deleteIfExists(p)
         catch
             % Leave the temp file on any failure; not fatal to the test.
         end
+    end
+end
+
+function rmdirIfExists(d)
+%RMDIRIFEXISTS Best-effort delete of a temp dir (never raises).
+    if exist(d, 'dir') == 7
+        try, rmdir(d, 's'); catch, end
     end
 end
 
