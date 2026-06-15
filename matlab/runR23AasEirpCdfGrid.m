@@ -28,6 +28,8 @@ function out = runR23AasEirpCdfGrid(varargin)
 %        opts.splitSectorPower, opts.progressEvery, opts.mcChunkSize,
 %        opts.outputCsvPath, opts.outputMetadataPath,
 %        opts.numUesPerSector, opts.maxEirpPerSector_dBm,
+%        opts.ueCountModel, opts.minUesPerSector, opts.maxUesPerSector,
+%        opts.meanUesPerSector,
 %        opts.environment, opts.computePointingHeatmap,
 %        opts.computePointingHistogram, opts.pointingAzBinEdgesDeg,
 %        opts.pointingElBinEdgesDeg, opts.pointingWeightedMap,
@@ -273,6 +275,37 @@ function out = runR23AasEirpCdfGrid(varargin)
 %       view for narrowband victims, presented ALONGSIDE the band-integrated
 %       baseline. See imtAasSubbandEnvelope.
 %
+%   Variable per-snapshot UE-count model (non-breaking; default 'fixed'):
+%       opts.ueCountModel ('fixed' | 'uniform' | 'poisson', default
+%           'fixed') -> how many co-scheduled UEs (= beams) are DRAWN each
+%           Monte Carlo snapshot.
+%           'fixed'   (default) -> NUMUESPERSECTOR beams every snapshot,
+%                     drawing NOTHING extra. The loop RNG stream (and
+%                     therefore stats / percentileMaps) is BYTE-IDENTICAL to
+%                     today for a fixed seed, and out.ueCount = [].
+%           'uniform' -> nUe ~ U{minUesPerSector .. maxUesPerSector} via
+%                     base-MATLAB randi.
+%           'poisson' -> nUe ~ Poisson(meanUesPerSector) via a base-MATLAB
+%                     Knuth sampler (NO Statistics Toolbox), then clamped to
+%                     [minUesPerSector, maxUesPerSector].
+%       opts.minUesPerSector  integer >= 1 (default 1)
+%       opts.maxUesPerSector  integer >= minUesPerSector
+%           (default max(2*numUesPerSector, numUesPerSector+1))
+%       opts.meanUesPerSector finite scalar > 0 = Poisson lambda
+%           (default numUesPerSector)
+%       The min/max/mean fields are validated and used ONLY when the model
+%       is not 'fixed'. The variable models draw a per-snapshot count and
+%       therefore INTENTIONALLY diverge from the fixed RNG stream (they
+%       reshape stats / percentileMaps). Total sector power is conserved per
+%       snapshot regardless of the drawn count: the even split / weighting
+%       falls out of numel(beams.steerAzDeg) downstream, so the
+%       band-integrated sector peak and the power self-check are unchanged in
+%       BOUND. The model COMPOSES with opts.layering and opts.prbWeighting
+%       (both derive the beam count per call), while the opts.ssb /
+%       time-weighted frame budget continues to use the NOMINAL
+%       numUesPerSector. The realized count distribution is surfaced in
+%       out.ueCount (min/max/mean/tally/pmf).
+%
 %   Activity-weighted EIRP CDF layer (non-breaking; default OFF):
 %       opts.activityWeightedCdf (logical, default false) -> EXPLICIT
 %           trigger. When false (default), out.activityWeightedPercentileMaps
@@ -501,6 +534,23 @@ function out = runR23AasEirpCdfGrid(varargin)
 %                           config. SEPARATE output (like opts.epre): the
 %                           band-integrated CDF is NOT reshaped and is
 %                           byte-identical when off.
+%       .ueCount            variable per-snapshot UE-count diagnostics when
+%                           opts.ueCountModel is not 'fixed', else [] (the
+%                           default 'fixed' path is byte-identical):
+%                             .model         resolved model name
+%                             .nominalNumUes nominal numUesPerSector
+%                             .minUes/.maxUes/.meanUesParam  resolved bounds
+%                             .realizedMin/.realizedMax/.realizedMean  the
+%                                 observed per-snapshot co-scheduled-UE count
+%                             .countValues   1..maxUes
+%                             .countTally    per-count snapshot tally
+%                             .countPmf      countTally / numSnapshots
+%                             .numSnapshots  snapshots drawn
+%                           out.metadata.ueCountModel /
+%                           .ueCountRealizedMean / .ueCountRealizedMin /
+%                           .ueCountRealizedMax record the model and realized
+%                           spread (RealizedMean is the constant numBeams
+%                           when 'fixed').
 %       .percentileTable    optional table from
 %                           export_eirp_percentile_table when
 %                           opts.outputCsvPath is provided.
@@ -746,6 +796,32 @@ function out = runR23AasEirpCdfGrid(varargin)
         validateActivityFactor(opts.networkLoadingFactor, 'networkLoadingFactor');
     end
 
+    % ---- variable per-snapshot UE-count model (non-breaking; default
+    %      'fixed') --------------------------------------------------------
+    % opts.ueCountModel selects how many co-scheduled UEs (= beams) are
+    % DRAWN each Monte Carlo snapshot. 'fixed' (default) uses the NOMINAL
+    % numUesPerSector every snapshot and draws NOTHING extra, so the loop's
+    % RNG stream (and therefore stats / percentileMaps) is byte-identical to
+    % today. 'uniform' draws nUe ~ U{minUes..maxUes} via base-MATLAB randi;
+    % 'poisson' draws nUe ~ Poisson(meanUes) via a base-MATLAB Knuth sampler
+    % (NO Statistics Toolbox), then clamps to [minUes, maxUes]. The variable
+    % models therefore intentionally DIFFER from the fixed RNG stream. The
+    % model composes with opts.layering and opts.prbWeighting (everything
+    % downstream derives the beam count from numel(beams.steerAzDeg)); the
+    % SSB / time-weighted frame budget continues to use the NOMINAL
+    % numUesPerSector. The min/max/mean bounds are validated and used ONLY
+    % when the model is not 'fixed'.
+    opts.ueCountModel     = getOpt(opts, 'ueCountModel', 'fixed');
+    opts.minUesPerSector  = getOpt(opts, 'minUesPerSector', 1);
+    opts.maxUesPerSector  = getOpt(opts, 'maxUesPerSector', ...
+        max(2*double(opts.numUesPerSector), double(opts.numUesPerSector)+1));
+    opts.meanUesPerSector = getOpt(opts, 'meanUesPerSector', double(opts.numUesPerSector));
+    ueCountModel    = lower(char(opts.ueCountModel));
+    ueCountVariable = ~strcmp(ueCountModel, 'fixed');
+    if ueCountVariable
+        validateUeCountModelParams(opts);
+    end
+
     % ---- propagate maxEirpPerSector override into params ------------
     if isnumeric(opts.maxEirpPerSector_dBm) && isscalar(opts.maxEirpPerSector_dBm) ...
             && isfinite(opts.maxEirpPerSector_dBm)
@@ -938,12 +1014,48 @@ function out = runR23AasEirpCdfGrid(varargin)
             'peakCompositeGainDbi', getOpt(params, 'peakGainDbi', NaN));
     end
 
+    % ---- variable per-snapshot UE-count streaming aggregator ---------
+    % Only created when the model is NOT 'fixed', so the default path is
+    % untouched (and the loop draws no extra RNG). Accumulates the realized
+    % per-snapshot UE-count min/max/sum, a tally over 1..maxUesPerSector, and
+    % the snapshot count -- all fixed-size, in the streaming spirit of `stats`.
+    if ueCountVariable
+        ueAgg = struct('countMin', Inf, 'countMax', 0, 'countSum', 0, ...
+            'tally', zeros(1, double(opts.maxUesPerSector)), 'numSnapshots', 0);
+    end
+
     tStart = tic;
     [hWaitbar_ml_mc_chunks,hWaitbarMsgQueue_ml_mc_chunks]= ParForWaitbarCreateMH_time('Number of MC: ',numMc);    %%%%%%% Create ParFor Waitbar, this one covers points and chunks
     for it = 1:numMc
         it
+        % ---- variable per-snapshot UE count (default 'fixed' draws none) -
+        % For 'fixed' nUeThis = numBeams with NO draw, so the RNG stream is
+        % byte-identical to today. The variable models draw a per-snapshot
+        % count (and therefore intentionally diverge from the fixed stream);
+        % everything downstream derives the beam count from
+        % numel(beams.steerAzDeg), so it adapts automatically.
+        switch ueCountModel
+            case 'fixed'
+                nUeThis = numBeams;                                  % NO draw
+            case 'uniform'
+                nUeThis = randi([opts.minUesPerSector, opts.maxUesPerSector]);
+            case 'poisson'
+                nUeThis = poissonSampleBaseMatlab(opts.meanUesPerSector);
+                nUeThis = min(max(nUeThis, opts.minUesPerSector), opts.maxUesPerSector);
+            otherwise
+                error('runR23AasEirpCdfGrid:ueCountModel', ...
+                    'Unknown ueCountModel "%s".', ueCountModel);
+        end
         beamGenOpts = struct('clampElevation', logical(opts.clampElevation));
-        beams = imtAasGenerateBeamSet(numBeams, sector, beamGenOpts);
+        beams = imtAasGenerateBeamSet(nUeThis, sector, beamGenOpts);
+
+        if ueCountVariable
+            ueAgg.countMin           = min(ueAgg.countMin, nUeThis);
+            ueAgg.countMax           = max(ueAgg.countMax, nUeThis);
+            ueAgg.countSum           = ueAgg.countSum + nUeThis;
+            ueAgg.tally(nUeThis)     = ueAgg.tally(nUeThis) + 1;
+            ueAgg.numSnapshots       = ueAgg.numSnapshots + 1;
+        end
 
         % ---- optional rank / MU-MIMO layer expansion ----------------
         % Gated on opts.layering.enable. When disabled this branch is NOT
@@ -1291,6 +1403,15 @@ function out = runR23AasEirpCdfGrid(varargin)
     metadata.numSnapshots          = double(opts.numMc);
     metadata.numBeams              = numBeams;
     metadata.numUesPerSector       = numBeams;
+    % ---- variable per-snapshot UE-count model (additive) -----------
+    metadata.ueCountModel          = ueCountModel;
+    if ueCountVariable
+        metadata.ueCountRealizedMean = ueAgg.countSum / max(ueAgg.numSnapshots, 1);
+        metadata.ueCountRealizedMin  = ueAgg.countMin;
+        metadata.ueCountRealizedMax  = ueAgg.countMax;
+    else
+        metadata.ueCountRealizedMean = numBeams;   % constant
+    end
     metadata.maxEirpPerSector_dBm  = params.sectorEirpDbm;
     metadata.sectorEirpDbm         = params.sectorEirpDbm;
     metadata.perBeamPeakEirpDbm    = perBeamPeakEirpDbm;
@@ -1786,6 +1907,35 @@ function out = runR23AasEirpCdfGrid(varargin)
         out.metadata.includesSubband = false;
     end
 
+    % ---- variable per-snapshot UE-count diagnostics (default 'fixed') -
+    % NEW output field only. When the model is 'fixed' (default) the loop
+    % drew NOTHING extra and out.ueCount = [] (empty placeholder), so every
+    % existing output is byte-identical to a no-ueCount run for a fixed seed.
+    % For the variable models out.ueCount reports the realized per-snapshot
+    % co-scheduled-UE count distribution (min/max/mean/tally/pmf). Total
+    % sector power is conserved per snapshot regardless of the drawn count:
+    % the even split / weighting falls out of numel(beams.steerAzDeg)
+    % downstream, so the band-integrated sector peak and the power
+    % self-check are unchanged in BOUND.
+    if ueCountVariable
+        ueCount = struct( ...
+            'model',         ueCountModel, ...
+            'nominalNumUes', numBeams, ...
+            'minUes',        double(opts.minUesPerSector), ...
+            'maxUes',        double(opts.maxUesPerSector), ...
+            'meanUesParam',  double(opts.meanUesPerSector), ...
+            'realizedMin',   ueAgg.countMin, ...
+            'realizedMax',   ueAgg.countMax, ...
+            'realizedMean',  ueAgg.countSum / max(ueAgg.numSnapshots, 1), ...
+            'countValues',   1:double(opts.maxUesPerSector), ...
+            'countTally',    ueAgg.tally, ...
+            'countPmf',      ueAgg.tally / max(sum(ueAgg.tally), 1), ...
+            'numSnapshots',  ueAgg.numSnapshots);
+        out.ueCount = ueCount;
+    else
+        out.ueCount = [];
+    end
+
     % ---- optional CSV export ----------------------------------------
     if ~isempty(opts.outputCsvPath)
         out.percentileTable = export_eirp_percentile_table( ...
@@ -2093,6 +2243,49 @@ function validateNumMc(N)
         error('runR23AasEirpCdfGrid:badNumMc', ...
             'numMc / numSnapshots must be a positive integer.');
     end
+end
+
+function validateUeCountModelParams(opts)
+%VALIDATEUECOUNTMODELPARAMS Validate the variable UE-count bounds.
+%   Only invoked when opts.ueCountModel is not 'fixed'. minUesPerSector and
+%   maxUesPerSector must be positive integers with maxUesPerSector >=
+%   minUesPerSector; meanUesPerSector (the Poisson lambda) must be a finite
+%   scalar > 0. The 'fixed' model never consults these fields.
+    mn = opts.minUesPerSector;
+    mx = opts.maxUesPerSector;
+    mu = opts.meanUesPerSector;
+    if ~(isnumeric(mn) && isscalar(mn) && isfinite(mn) && mn >= 1 && mn == floor(mn))
+        error('runR23AasEirpCdfGrid:badMinUesPerSector', ...
+            ['minUesPerSector must be a positive integer (>= 1) when ', ...
+             'ueCountModel is not ''fixed''.']);
+    end
+    if ~(isnumeric(mx) && isscalar(mx) && isfinite(mx) && mx == floor(mx) && mx >= mn)
+        error('runR23AasEirpCdfGrid:badMaxUesPerSector', ...
+            ['maxUesPerSector must be an integer >= minUesPerSector when ', ...
+             'ueCountModel is not ''fixed''.']);
+    end
+    if ~(isnumeric(mu) && isscalar(mu) && isfinite(mu) && mu > 0)
+        error('runR23AasEirpCdfGrid:badMeanUesPerSector', ...
+            ['meanUesPerSector must be a finite scalar > 0 when ', ...
+             'ueCountModel is not ''fixed''.']);
+    end
+end
+
+function k = poissonSampleBaseMatlab(lambda)
+%POISSONSAMPLEBASEMATLAB Draw one Poisson(lambda) sample using base MATLAB.
+%   Knuth's multiplicative algorithm (rand-based), so NO Statistics Toolbox
+%   (poissrnd) is required. Consumes a variable number of rand() draws.
+    L = exp(-double(lambda));
+    k = 0;
+    p = 1;
+    while true
+        k = k + 1;
+        p = p * rand;
+        if p <= L
+            break;
+        end
+    end
+    k = k - 1;
 end
 
 function validateActivityFactor(v, name)
