@@ -1,0 +1,50 @@
+{
+  "goldenReferenceName": "r23-ctia-1x6-small-grid-v1",
+  "goldenReferenceVersion": 1,
+  "goldenReferencePurpose": "regression-anchor",
+  "scenarioPreset": "urban-baseline",
+  "randomSeed": 2.0260101E+7,
+  "numSnapshots": 20,
+  "azGrid_deg": [
+    -60,
+    -40,
+    -20,
+    0,
+    20,
+    40,
+    60
+  ],
+  "elGrid_deg": [
+    -10,
+    -8,
+    -6,
+    -4,
+    -2,
+    0
+  ],
+  "percentiles": [
+    1,
+    5,
+    10,
+    20,
+    50,
+    80,
+    90,
+    95,
+    99
+  ],
+  "expectedSelfCheckStatus": "pass",
+  "expectedObservedMaxGridEirp_dBm": 89.056698416751757,
+  "expectedMaxPercentileAcrossGrid_dBm": 89.5,
+  "goldenRunOptions": {
+    "aasGeometryPreset": "ctia_7ghz_1x6"
+  },
+  "createdBy": "freezeR23GoldenReference",
+  "createdUtc": "2026-06-15T00:54:34Z",
+  "repoCommitSha": "74d6b57fca587fe354b673cd8d391e4c00e994e0",
+  "tolerances": {
+    "absToleranceDeterministicEirp_dB": 1E-6,
+    "absTolerancePercentileBinned_dB": 0.51,
+    "rationale": "observedMaxGridEirp_dBm is deterministic from a fixed seed; percentile_summary CSV values are emitted in 1 dB bin centers, so a 0.51 dB tolerance accommodates half-bin behavior."
+  }
+}
