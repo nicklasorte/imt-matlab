@@ -1,0 +1,33 @@
+R23 AAS EIRP Validation Snapshot
+================================
+
+Provenance
+  matlabVersion          : 25.2.0.3150157 (R2025b) Update 4 (R2025b)
+  repoCommitSha          : 74d6b57fca587fe354b673cd8d391e4c00e994e0
+  platform               : mac-maca64
+  validationTimestampUtc : 2026-06-15T00:54:33Z
+
+Scenario
+  scenarioPreset         : urban-baseline
+  environment            : urban
+  numUesPerSector        : 3
+  maxEirpPerSector_dBm   : 78.3
+  splitSectorPower       : true
+  cellRadius_m           : 400
+  bsHeight_m             : 18
+  numMc / numSnapshots   : 20
+
+Power-semantics self-check
+  status                 : pass
+  observedMaxGridEirp_dBm: 76.57647166
+  expectedSectorPeak_dBm : 78.3
+  expectedPerBeamPeak_dBm: 73.52878745
+  peakShortfall_dB       : -3.047684203
+  tolerance_dB           : 1e-06
+
+Scope
+  Antenna-face EIRP only. No path loss, no clutter, no
+  receiver antenna, no I/N, no propagation, no coordination
+  distance, no multi-site aggregation. This snapshot is a
+  lightweight reproducibility metadata sidecar, NOT a raw
+  Monte Carlo store.

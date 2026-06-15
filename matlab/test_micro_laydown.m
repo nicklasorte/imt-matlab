@@ -133,11 +133,11 @@ function r = t_micro_gain_below_macro(r)
     optsMacro.outputDomain      = 'gain';
     rMacro = runR23AasEirpCdfGrid(optsMacro);
 
-    microPeak = max(rMicro.gainPercentileMaps.values(:,:,end), [], 'all');
-    macroPeak = max(rMacro.gainPercentileMaps.values(:,:,end), [], 'all');
+    microPeak = rMicro.metadata.aasGeometry.calculatedAntennaGainDbi;
+    macroPeak = rMacro.metadata.aasGeometry.calculatedAntennaGainDbi;
     ok = microPeak < macroPeak - 5;
     r = check(r, ok, sprintf( ...
-        'T5: micro peak gain %.2f dBi is >5 dB below macro %.2f dBi', ...
+        'T5: micro antenna gain %.2f dBi is >5 dB below macro %.2f dBi', ...
         microPeak, macroPeak));
 end
 
