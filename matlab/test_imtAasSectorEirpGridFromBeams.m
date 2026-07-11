@@ -294,6 +294,30 @@ function results = test_imtAasSectorEirpGridFromBeams()
         'EIRP path must be identical with and without computeGain');
     fprintf('  [OK] default path adds no gain fields; EIRP path unchanged\n');
 
+    % ===== 15. unsupported normalization mode fails explicitly =========
+    falseRejected = false;
+    try
+        imtAasSectorEirpGridFromBeams(azGridDeg, elGridDeg, beams1, p, ...
+            struct('normalizeEachBeamToPeak', false));
+    catch err
+        falseRejected = strcmp(err.identifier, ...
+            'imtAasSectorEirpGridFromBeams:unsupportedNormalization');
+    end
+    assert(falseRejected, ...
+        'normalizeEachBeamToPeak=false must fail explicitly');
+    invalidRejected = false;
+    try
+        imtAasSectorEirpGridFromBeams(azGridDeg, elGridDeg, beams1, p, ...
+            struct('normalizeEachBeamToPeak', [1 0]));
+    catch err
+        invalidRejected = strcmp(err.identifier, ...
+            'imtAasSectorEirpGridFromBeams:invalidNormalization');
+    end
+    assert(invalidRejected, ...
+        'nonscalar normalizeEachBeamToPeak must fail validation');
+    fprintf(['  [OK] normalizeEachBeamToPeak=false is unsupported and ', ...
+             'invalid values fail explicitly\n']);
+
     results.passed = true;
     fprintf('--- test_imtAasSectorEirpGridFromBeams PASSED ---\n');
 end

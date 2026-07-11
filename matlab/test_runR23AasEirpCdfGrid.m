@@ -53,6 +53,8 @@ function results = test_runR23AasEirpCdfGrid()
 %       T23. resolveInputs: a non-char name in a name-value name slot
 %            (struct first arg followed by a numeric) throws
 %            'runR23AasEirpCdfGrid:badNV'.
+%       T24. mcChunkSize is validated and chunked/unchunked runs preserve
+%            identical streaming results for the same seed.
 %
 %   Returns struct with .passed (logical) and .summary (cellstr).
 
@@ -82,6 +84,7 @@ function results = test_runR23AasEirpCdfGrid()
     results = t_num_beams_conflict(results);
     results = t_unopenable_sidecar_warns(results);
     results = t_bad_name_value_name(results);
+    results = t_mc_chunk_size(results);
 
     fprintf('\n--- test_runR23AasEirpCdfGrid summary ---\n');
     for k = 1:numel(results.summary)
@@ -533,6 +536,41 @@ function r = t_bad_name_value_name(r)
                     'runR23AasEirpCdfGrid:badNV');
     r = check(r, ok23, ...
         'T23: non-char name-value name throws runR23AasEirpCdfGrid:badNV');
+end
+
+% =====================================================================
+% T24: mcChunkSize validation and deterministic chunking.
+% =====================================================================
+function r = t_mc_chunk_size(r)
+    opts = smallOpts();
+    opts.numMc = 7;
+    opts.seed = 123;
+    opts.mcChunkSize = opts.numMc;
+    unchunked = runR23AasEirpCdfGrid(opts);
+
+    opts.mcChunkSize = 3;
+    quietText = evalc('chunked = runR23AasEirpCdfGrid(opts);');
+    same = isequal(unchunked.stats.counts, chunked.stats.counts) && ...
+           isequaln(unchunked.stats.sum_lin_mW, chunked.stats.sum_lin_mW) && ...
+           isequaln(unchunked.stats.min_dBm, chunked.stats.min_dBm) && ...
+           isequaln(unchunked.stats.max_dBm, chunked.stats.max_dBm) && ...
+           isequaln(unchunked.percentileMaps.values, chunked.percentileMaps.values);
+    echoed = chunked.stats.opts.mcChunkSize == 3;
+    quiet = ~contains(quietText, '[R23-MC]') && ...
+            ~contains(quietText, 'Percentile Maps') && ...
+            ~contains(quietText, 'Elapsed time');
+
+    badId = 'runR23AasEirpCdfGrid:badMcChunkSize';
+    badZero = throwsId(@() runR23AasEirpCdfGrid(setfield(smallOpts(), ...
+        'mcChunkSize', 0)), badId); %#ok<SFLD>
+    badFrac = throwsId(@() runR23AasEirpCdfGrid(setfield(smallOpts(), ...
+        'mcChunkSize', 2.5)), badId); %#ok<SFLD>
+
+    r = check(r, same && echoed && quiet && badZero && badFrac, sprintf( ...
+        ['T24: mcChunkSize chunking is deterministic, echoed, quiet, and ', ...
+         'validates zero/fractional values ', ...
+         '(same=%d echo=%d quiet=%d zero=%d frac=%d)'], ...
+        same, echoed, quiet, badZero, badFrac));
 end
 
 % =====================================================================

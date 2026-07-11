@@ -19,7 +19,7 @@ Two pattern paths are supported:
 ```
 run_all_tests.m                        single entry point for the test suite
 matlab/
-├── imt2020_single_element_pattern.m   single element gain (M.2101 Table 4)
+├── imt2020_single_element_pattern.m   single element gain (M.2101 Table 3)
 ├── imt2020_composite_pattern.m        composite array gain (simple M.2101)
 ├── imt2020_composite_pattern_extended.m R23 extended AAS composite (sub-array + tilt)
 ├── imt_aas_mechanical_tilt_transform.m  sector->panel y-axis rotation
@@ -92,12 +92,12 @@ A_A = A_E + 10·log10( 1 + ρ·(|S|² / (N_H·N_V) - 1) ).
 ## What was mapped from M.2101-0
 
 Recommendation ITU-R M.2101-0 (`R-REC-M.2101-0-201702-I!!PDF-E.pdf`),
-Annex 1 / Table 4 specifies:
+Annex 1 / Tables 3 and 4 specify:
 
-* the per-element horizontal cut `A_E,H(φ) = -min(12·(φ/φ_3dB)², A_m)`
-* the per-element vertical   cut `A_E,V(θ) = -min(12·((θ-90°)/θ_3dB)², SLA_ν)`
-* the combined element pattern `A_E(φ,θ) = G_E,max - min(-(A_E,H + A_E,V), A_m)`
-* the array superposition vector and the rho-correlation form (with rho = 1
+* Table 3 gives the per-element horizontal cut `A_E,H(φ) = -min(12·(φ/φ_3dB)², A_m)`
+* Table 3 gives the per-element vertical cut `A_E,V(θ) = -min(12·((θ-90°)/θ_3dB)², SLA_ν)`
+* Table 3 gives the combined element pattern `A_E(φ,θ) = G_E,max - min(-(A_E,H + A_E,V), A_m)`
+* Table 4 gives the array superposition vector and the rho-correlation form (with rho = 1
   giving fully correlated array gain; see 3GPP TR 37.840 §5.4.4.1.4)
 * the angle conventions used inside the equations
 
@@ -722,6 +722,7 @@ Recognised flat `opts` fields and name-value keys (all optional):
 | `seed`                    | `1`                              | RNG seed (set once at start) |
 | `splitSectorPower`        | `true`                           | split sector EIRP across simultaneous beams |
 | `computePointingHeatmap`  | `true`                           | compute mean pointing-angle heatmaps |
+| `mcChunkSize`             | `min(numMc,500)`                 | positive integer number of draws per processing chunk |
 | `progressEvery`           | `0`                              | print progress every N draws |
 | `outputCsvPath`           | `''`                             | optional `p000:p100` table CSV |
 | `outputMetadataPath`      | `''`                             | optional JSON / text metadata sidecar |
@@ -2450,4 +2451,3 @@ wrapping `tic / toc` themselves.
 * identical seeds produce identical stats; different seeds do not
 * `progressEvery = 0` emits no progress lines, while `progressEvery > 0`
   emits at least one `[MC] ... ETA=...` line
-

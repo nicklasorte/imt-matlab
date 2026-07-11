@@ -322,7 +322,7 @@ function out = runR23AasEirpCdfGrid(varargin)
 %       percentile Pout maps to the always-on percentile
 %           Pon = 100 - (100 - Pout) / p
 %       (exact under eirp_percentile_maps); requested percentiles in the off
-%       region (Pon < 0, i.e. Pout <= 100*(1-p)) take opts.activityOffFloorDbm.
+%       region (Pon <= 0, i.e. Pout <= 100*(1-p)) take opts.activityOffFloorDbm.
 %       p = 1 reproduces the raw percentileMaps exactly. p is geometry-
 %       independent, so this works for every aasGeometryPreset.
 %       opts.activityModel ('legacy' | 'frame', default 'legacy') selects
@@ -835,6 +835,7 @@ function out = runR23AasEirpCdfGrid(varargin)
     % ---- validation -------------------------------------------------
     validateNumUes(opts.numUesPerSector);
     validateNumMc(opts.numMc);
+    validateMcChunkSize(opts.mcChunkSize);
 
     azGrid = double(opts.azGridDeg(:).');
     elGrid = double(opts.elGridDeg(:).');
@@ -950,6 +951,7 @@ function out = runR23AasEirpCdfGrid(varargin)
 
     progressEvery = double(opts.progressEvery);
     numMc         = double(opts.numMc);
+    chunkSize     = min(double(opts.mcChunkSize), numMc);
 
     % ---- rank / MU-MIMO layering streaming aggregator ---------------
     % Only created when the layer is enabled, so the OFF path is untouched
@@ -1026,8 +1028,11 @@ function out = runR23AasEirpCdfGrid(varargin)
 
     tStart = tic;
     [hWaitbar_ml_mc_chunks,hWaitbarMsgQueue_ml_mc_chunks]= ParForWaitbarCreateMH_time('Number of MC: ',numMc);    %%%%%%% Create ParFor Waitbar, this one covers points and chunks
-    for it = 1:numMc
-        it
+    nDone = 0;
+    while nDone < numMc
+        nThis = min(chunkSize, numMc - nDone);
+        for chunkIt = 1:nThis
+        it = nDone + chunkIt;
         % ---- variable per-snapshot UE count (default 'fixed' draws none) -
         % For 'fixed' nUeThis = numBeams with NO draw, so the RNG stream is
         % byte-identical to today. The variable models draw a per-snapshot
@@ -1198,6 +1203,8 @@ function out = runR23AasEirpCdfGrid(varargin)
                 it, numMc, 100 * it / numMc, tElapsed, tRemaining);
         end
         hWaitbarMsgQueue_ml_mc_chunks.send(0);
+        end
+        nDone = nDone + nThis;
     end
     delete(hWaitbarMsgQueue_ml_mc_chunks);
     close(hWaitbar_ml_mc_chunks);
@@ -1338,10 +1345,7 @@ function out = runR23AasEirpCdfGrid(varargin)
     end
 
     % ---- percentile maps --------------------------------------------
-    'Percentile Maps'
-    tic;
     pmaps = eirp_percentile_maps(stats, opts.percentiles);
-    toc;
 
     % NOTE: the activity-weighted EIRP percentile maps are computed LATER
     % (after the optional SSB sweep) so that activityModel='frame' can read
@@ -1584,7 +1588,7 @@ function out = runR23AasEirpCdfGrid(varargin)
     % off floor, so the requested output percentile Pout maps to the
     % always-on percentile  Pon = 100 - (100 - Pout)/p  (exact under the
     % first-bin-where-cdf>=target lookup in eirp_percentile_maps), and
-    % requested percentiles in the off region (Pon < 0) take the off floor.
+    % requested percentiles in the off region (Pon <= 0) take the off floor.
     % This block runs AFTER the optional SSB sweep so the 'frame' model can
     % source p and the per-cell sweep off floor from the SAME frame budget /
     % out.ssb used by the time-weighted grid.
@@ -1647,7 +1651,10 @@ function out = runR23AasEirpCdfGrid(varargin)
         end
 
         Pon    = 100 - (100 - Pout) ./ p;
-        onMask = Pon >= 0;                              % which requested pct are "on"
+        % At Pout = 100*(1-p), the CDF has accumulated exactly the off-state
+        % mass, so the quantile is still the off floor. With p=1 there is no
+        % off-state mass, and p0 follows the raw empirical minimum.
+        onMask = Pon > 0 | p == 1;                     % requested pct in "on" region
         if isscalar(offFloor)
             awVals = repmat(offFloor, NazAw, NelAw, numel(Pout));
         else
@@ -2242,6 +2249,14 @@ function validateNumMc(N)
             N == floor(N))
         error('runR23AasEirpCdfGrid:badNumMc', ...
             'numMc / numSnapshots must be a positive integer.');
+    end
+end
+
+function validateMcChunkSize(N)
+    if ~(isnumeric(N) && isreal(N) && isscalar(N) && isfinite(N) && ...
+            N >= 1 && N == floor(N))
+        error('runR23AasEirpCdfGrid:badMcChunkSize', ...
+            'mcChunkSize must be a positive integer.');
     end
 end
 

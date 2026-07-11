@@ -1,12 +1,12 @@
 function elementGainDbi = imtAasElementPattern(azDeg, elDeg, params)
-%IMTAASELEMENTPATTERN Single-element gain pattern (M.2101 Table 4).
+%IMTAASELEMENTPATTERN Single-element gain pattern (M.2101 Table 3).
 %
 %   ELEMENTGAINDBI = imtAasElementPattern(AZDEG, ELDEG, PARAMS)
 %
 %   Returns the absolute single-element gain in dBi for the IMT AAS sub-
 %   array element evaluated at observation angles (AZDEG, ELDEG). The
 %   closed form is the standard separable horizontal+vertical attenuation
-%   structure of ITU-R Rec. M.2101-0 Annex 1 / Table 4:
+%   structure of ITU-R Rec. M.2101-0 Annex 1 / Table 3:
 %
 %       A_EH(phi)   = -min( k * (phi / phi_3dB)^2,        A_m   )
 %       A_EV(elev)  = -min( k * (elev / theta_3dB)^2,     SLA_v )

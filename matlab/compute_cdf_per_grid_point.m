@@ -33,7 +33,7 @@ function cdf = compute_cdf_per_grid_point(eirpGrid, percentiles)
         error('compute_cdf_per_grid_point:missingEirpGrid', ...
             'eirpGrid (Naz x Nel x numSnapshots) is required.');
     end
-    if ndims(eirpGrid) > 3 %#ok<ISMAT>
+    if ndims(eirpGrid) > 3
         error('compute_cdf_per_grid_point:badShape', ...
             'eirpGrid must be at most 3-D.');
     end
@@ -49,13 +49,12 @@ function cdf = compute_cdf_per_grid_point(eirpGrid, percentiles)
     end
     percentiles = sort(double(percentiles(:).'));
 
-    sz = size(eirpGrid);
-    if numel(sz) == 2
-        Naz = sz(1); Nel = 1; numSnap = sz(2);
-        eirpGrid = reshape(eirpGrid, Naz, Nel, numSnap);
-    else
-        Naz = sz(1); Nel = sz(2); numSnap = sz(3);
-    end
+    % MATLAB suppresses a trailing singleton dimension, so a Naz x Nel x 1
+    % cube is reported as a 2-D matrix. Preserve both grid axes and treat it
+    % as one snapshot, as required by the documented input contract.
+    Naz = size(eirpGrid, 1);
+    Nel = size(eirpGrid, 2);
+    numSnap = size(eirpGrid, 3);
 
     sortedEirpDbm = sort(eirpGrid, 3, 'ascend');
     cdfLevels = (1:numSnap) ./ numSnap;
