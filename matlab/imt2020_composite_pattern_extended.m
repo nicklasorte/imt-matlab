@@ -47,7 +47,7 @@ function [gain_dBi, rawGain_dBi, rawPeak_dBi] = ...
 %       theta_i  = -elPanel_i
 %
 %   Single-element gain  A_E(phi, theta) from
-%       imt2020_single_element_pattern (M.2101 Table 4).
+%       imt2020_single_element_pattern (M.2101 Table 3).
 %
 %   N_H x N_V sub-array array factor (M.2101 / 3GPP TR 37.840):
 %       arg(m,n) = 2*pi * ( n*d_V*cos(theta) + m*d_H*sin(theta)*sin(phi)

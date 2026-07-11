@@ -1,5 +1,5 @@
 function gainDbi = compute_element_pattern(theta, phi, params)
-%COMPUTE_ELEMENT_PATTERN Single-element AAS gain (M.2101 Table 4 closed form).
+%COMPUTE_ELEMENT_PATTERN Single-element AAS gain (M.2101 Table 3 closed form).
 %
 %   GAINDBI = compute_element_pattern(THETA, PHI, PARAMS)
 %

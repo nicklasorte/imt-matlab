@@ -13,6 +13,8 @@ function results = test_eirp_percentile_maps()
 %       5. Percentiles are monotonic non-decreasing across the P axis.
 %       6. Cells with zero counts produce NaN at every percentile.
 %       7. Bit-identical output across consecutive calls (determinism).
+%       8. The 0th percentile returns the lowest occupied bin.
+%       9. Invalid percentile values are rejected with a specific error.
 %
 %   Returns:
 %       struct('passed', logical, 'skipped', false, 'reason', '')
@@ -90,6 +92,31 @@ function results = test_eirp_percentile_maps()
     assert(isequaln(pmA, pmB), 'percentile maps must be deterministic');
     fprintf('  [OK] deterministic across consecutive calls\n');
 
+    % ===== 8. p0 selects the lowest occupied bin =====
+    pm0 = eirp_percentile_maps(stats1, [0 100]);
+    assert(all(abs(pm0.values(:) - mid5) < 1e-12), ...
+        'p0 and p100 must both select the sole occupied bin');
+    fprintf('  [OK] p0 selects the lowest occupied bin\n');
+
+    % ===== 9. invalid percentile validation =====
+    badId = 'eirp_percentile_maps:badPercentiles';
+    assert(throwsId(@() eirp_percentile_maps(stats, -1), badId), ...
+        'negative percentile must throw %s', badId);
+    assert(throwsId(@() eirp_percentile_maps(stats, 101), badId), ...
+        'percentile above 100 must throw %s', badId);
+    assert(throwsId(@() eirp_percentile_maps(stats, NaN), badId), ...
+        'NaN percentile must throw %s', badId);
+    fprintf('  [OK] invalid percentiles rejected with %s\n', badId);
+
     results.passed = true;
     fprintf('--- test_eirp_percentile_maps PASSED ---\n');
+end
+
+function tf = throwsId(fn, id)
+    tf = false;
+    try
+        fn();
+    catch err
+        tf = strcmp(err.identifier, id);
+    end
 end

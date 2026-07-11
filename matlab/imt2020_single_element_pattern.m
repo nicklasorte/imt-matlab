@@ -6,7 +6,7 @@ function A_E = imt2020_single_element_pattern(azim, elev, ...
 %                                        PHI_3DB, THETA_3DB, K)
 %
 %   Implements the single-element antenna pattern of ITU-R Rec. M.2101-0
-%   (Table 4 / Annex 1), as also used in 3GPP TR 37.840 sec. 5.4.4.
+%   (Table 3 / Annex 1), as also used in 3GPP TR 37.840 sec. 5.4.4.
 %
 %   Inputs (all in degrees / dB / dBi unless noted):
 %       azim       Azimuth, -180..180 [deg], any size
@@ -26,7 +26,7 @@ function A_E = imt2020_single_element_pattern(azim, elev, ...
 %       external elev  in [ -90,  90] deg
 %       internal theta = 90 - elev
 %
-%   Equations (M.2101 Table 4):
+%   Equations (M.2101 Table 3):
 %       A_EH(phi)   = -min( k * (phi/phi_3db)^2,            A_m   )
 %       A_EV(theta) = -min( k * ((theta-90)/theta_3db)^2,   SLA_nu)
 %       A_E         = G_Emax - min( -(A_EH + A_EV), A_m )

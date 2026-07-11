@@ -5,7 +5,7 @@ function results = test_r23_monte_carlo_and_cdf()
 %
 %   Lightweight regression suite for the R23 single-sector Monte Carlo
 %   snapshot runner (run_monte_carlo_snapshots) and the per-cell CDF
-%   builder (compute_cdf_per_grid_point). It pins six contracts:
+%   builder (compute_cdf_per_grid_point). It pins seven contracts:
 %
 %       T1. Deterministic reproducibility: identical seed -> bit-equal
 %           eirpGrid; identical shape.
@@ -26,6 +26,8 @@ function results = test_r23_monte_carlo_and_cdf()
 %       T6. Output dimension consistency: eirpGrid is
 %           [Naz, Nel, numSnapshots] and every CDF field has the matching
 %           shape ([Naz, Nel] or [Naz, Nel, numel(percentiles)]).
+%       T7. A 2-D Naz x Nel input is one snapshot and preserves both grid
+%           dimensions rather than treating Nel as the snapshot count.
 %
 %   Tests intentionally use small grids and modest snapshot counts to
 %   stay fast in run_all_tests. No plotting, no file I/O.
@@ -39,6 +41,7 @@ function results = test_r23_monte_carlo_and_cdf()
     results = t4_cdf_monotonic(results);
     results = t5_cdf_shape(results);
     results = t6_dimensions(results);
+    results = t7_single_snapshot_2d(results);
 
     fprintf('\n--- test_r23_monte_carlo_and_cdf summary ---\n');
     for k = 1:numel(results.summary)
@@ -248,6 +251,30 @@ function r = t6_dimensions(r)
                  okSorted && okLevels && okPct && okMean && ...
                  okMin && okMax, ...
         'T6: eirpGrid / CDF output dimensions consistent ([Naz, Nel, ...])');
+end
+
+% =====================================================================
+function r = t7_single_snapshot_2d(r)
+%T7 A trailing singleton snapshot dimension must preserve Naz x Nel.
+    eirp = [11 12 13; 21 22 23];
+    pcs = [0 50 100];
+    cdf = compute_cdf_per_grid_point(eirp, pcs);
+
+    okShape = size(cdf.sortedEirpDbm, 1) == 2 && ...
+              size(cdf.sortedEirpDbm, 2) == 3 && ...
+              size(cdf.sortedEirpDbm, 3) == 1 && ...
+              isequal(size(cdf.percentileEirpDbm), [2 3 3]);
+    okCount = cdf.numSnapshots == 1 && isequal(cdf.cdfLevels, 1);
+    okStats = isequal(cdf.meanEirpDbm, eirp) && ...
+              isequal(cdf.minEirpDbm, eirp) && ...
+              isequal(cdf.maxEirpDbm, eirp);
+    okPct = true;
+    for k = 1:numel(pcs)
+        okPct = okPct && isequal(cdf.percentileEirpDbm(:, :, k), eirp);
+    end
+
+    r = check(r, okShape && okCount && okStats && okPct, ...
+        'T7: 2-D Naz x Nel input is preserved as one snapshot');
 end
 
 % =====================================================================

@@ -40,7 +40,7 @@ with the auxiliary primitives listed in the AAS-01 task description):
 | `sample_ue_positions_in_sector` | seeded UE laydown inside the sector |
 | `compute_beam_angles_bs_to_ue` | BS-to-UE pointing angles |
 | `clamp_beam_to_r23_coverage` | clamp pointing into +/-60 az and -10..0 el |
-| `compute_element_pattern` | M.2101 Table 4 single-element gain (snake_case wrapper) |
+| `compute_element_pattern` | M.2101 Table 3 single-element gain (snake_case wrapper) |
 | `compute_subarray_factor` | L-element vertical sub-array factor (snake_case primitive) |
 | `compute_array_factor` | N_H x N_V outer + L sub-array factor (snake_case wrapper) |
 | `compute_bs_gain_toward_grid` | full BS composite gain over a grid |

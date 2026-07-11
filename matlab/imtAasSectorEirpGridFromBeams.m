@@ -50,7 +50,10 @@ function out = imtAasSectorEirpGridFromBeams(azGridDeg, elGridDeg, beams, params
 %                                               (true if missing)
 %                       aggregationMode         default 'sum_mW'
 %                       returnPerBeam           default true
-%                       normalizeEachBeamToPeak default true
+%                       normalizeEachBeamToPeak must be true (default).
+%                                               false is rejected because
+%                                               independent peak normalization
+%                                               is part of the R23 model contract.
 %                       computeGain             default false. When true,
 %                                               the ABSOLUTE composite gain
 %                                               in dBi is captured per beam
@@ -207,9 +210,24 @@ function out = imtAasSectorEirpGridFromBeams(azGridDeg, elGridDeg, beams, params
 
     if isfield(opts, 'normalizeEachBeamToPeak') && ...
             ~isempty(opts.normalizeEachBeamToPeak)
-        normalizeEachBeamToPeak = logical(opts.normalizeEachBeamToPeak);
+        normalizeEachBeamToPeak = opts.normalizeEachBeamToPeak;
     else
         normalizeEachBeamToPeak = true;
+    end
+    validNormalizationType = islogical(normalizeEachBeamToPeak) || ...
+        isnumeric(normalizeEachBeamToPeak);
+    if ~(validNormalizationType && isreal(normalizeEachBeamToPeak) && ...
+            isscalar(normalizeEachBeamToPeak) && ...
+            isfinite(normalizeEachBeamToPeak) && ...
+            (normalizeEachBeamToPeak == 0 || normalizeEachBeamToPeak == 1))
+        error('imtAasSectorEirpGridFromBeams:invalidNormalization', ...
+            'normalizeEachBeamToPeak must be a logical scalar or numeric 0/1.');
+    end
+    normalizeEachBeamToPeak = logical(normalizeEachBeamToPeak);
+    if ~normalizeEachBeamToPeak
+        error('imtAasSectorEirpGridFromBeams:unsupportedNormalization', ...
+            ['normalizeEachBeamToPeak=false is unsupported: the R23 model ', ...
+             'requires every steered beam to be independently peak-normalized.']);
     end
 
     if isfield(opts, 'computeGain') && ~isempty(opts.computeGain)

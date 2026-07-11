@@ -20,7 +20,13 @@ function pmaps = eirp_percentile_maps(stats, percentiles)
     if nargin < 2 || isempty(percentiles)
         percentiles = [1 5 10 50 90 95 99];
     end
-    percentiles = percentiles(:).';
+    if ~(isnumeric(percentiles) && isreal(percentiles) && ...
+            isvector(percentiles) && all(isfinite(percentiles(:))) && ...
+            all(percentiles(:) >= 0) && all(percentiles(:) <= 100))
+        error('eirp_percentile_maps:badPercentiles', ...
+            'percentiles must be a finite real numeric vector in [0, 100].');
+    end
+    percentiles = double(percentiles(:).');
 
     edges = stats.binEdges;
     mids  = 0.5 .* (edges(1:end-1) + edges(2:end));   % bin midpoints
@@ -36,8 +42,9 @@ function pmaps = eirp_percentile_maps(stats, percentiles)
     values = NaN(Naz*Nel, P);
     for j = 1:P
         target = percentiles(j) ./ 100;
-        % first bin with cdf >= target
-        ge = cdf >= target;
+        % First bin with cdf >= target. For p0, also require positive mass so
+        % the result is the lowest occupied bin, not the first configured bin.
+        ge = (cdf >= target) & ((target > 0) | (cdf > 0));
         % handle empty cells (no draws)
         anyGE = any(ge, 2);
         idx = ones(Naz*Nel, 1);

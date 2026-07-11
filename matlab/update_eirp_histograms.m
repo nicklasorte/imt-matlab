@@ -16,6 +16,15 @@ function stats = update_eirp_histograms(stats, eirp_dBm)
     edges = stats.binEdges;
     Nbin  = numel(edges) - 1;
 
+    if ~(isnumeric(eirp_dBm) && isreal(eirp_dBm))
+        error('update_eirp_histograms:invalidEirp', ...
+            'eirp_dBm must be a real numeric array.');
+    end
+    if any(isnan(eirp_dBm(:)))
+        error('update_eirp_histograms:nanEirp', ...
+            'eirp_dBm must not contain NaN values.');
+    end
+
     % --- linear (mW) sum for arithmetic mean of linear power ---------------
     stats.sum_lin_mW = stats.sum_lin_mW + 10.^(eirp_dBm ./ 10);
 
@@ -29,7 +38,10 @@ function stats = update_eirp_histograms(stats, eirp_dBm)
     binIdx = discretize(eirp_dBm, edges);
     binIdx(eirp_dBm < edges(1))     = 1;
     binIdx(eirp_dBm >= edges(end))  = Nbin;
-    binIdx(isnan(binIdx))           = Nbin;
+    if any(isnan(binIdx(:)))
+        error('update_eirp_histograms:unbinnedEirp', ...
+            'One or more EIRP values could not be assigned to a histogram bin.');
+    end
 
     [Naz, Nel] = size(eirp_dBm);
     azIdx = repmat((1:Naz).', 1, Nel);

@@ -14,6 +14,7 @@ function results = test_update_eirp_histograms()
 %       6. EIRP at or above the last edge bin-bins into bin Nbin.
 %       7. Total count across all bins per cell equals numMc after K
 %          updates (mass conservation).
+%       8. NaN input errors instead of being counted in the highest bin.
 %
 %   Returns:
 %       struct('passed', logical, 'skipped', false, 'reason', '')
@@ -88,6 +89,20 @@ function results = test_update_eirp_histograms()
         K, mat2str(unique(double(perCellTotal(:))).'));
     assert(statsK.numMc == K, 'numMc must equal K');
     fprintf('  [OK] sum(counts, 3) per cell == numMc after %d updates\n', K);
+
+    % ===== 8. NaN must not become a high-bin observation =====
+    statsNan = initStats(Naz, Nel, Nbin, edges);
+    eirpNan = 27 .* ones(Naz, Nel);
+    eirpNan(2, 1) = NaN;
+    threwNan = false;
+    try
+        update_eirp_histograms(statsNan, eirpNan);
+    catch err
+        threwNan = strcmp(err.identifier, 'update_eirp_histograms:nanEirp');
+    end
+    assert(threwNan, ...
+        'NaN EIRP must throw update_eirp_histograms:nanEirp');
+    fprintf('  [OK] NaN EIRP rejected instead of counted in the highest bin\n');
 
     results.passed = true;
     fprintf('--- test_update_eirp_histograms PASSED ---\n');

@@ -59,7 +59,7 @@ function params = imtAasDefaultParams()
 
     params = struct();
 
-    % ---- single-element / per-polarization (M.2101 Table 4) -----------
+    % ---- single-element / per-polarization (M.2101 Table 3) -----------
     params.elementGainDbi              = 6.4;
     params.hBeamwidthDeg               = 90;
     params.vBeamwidthDeg               = 65;

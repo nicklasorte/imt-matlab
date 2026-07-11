@@ -10,7 +10,7 @@ function results = test_activity_weighted_cdf()
 %   sector radiates at its FULL peak EIRP a fraction p of the time and is
 %   off the rest. The requested percentile Pout maps to the always-on
 %   percentile  Pon = 100 - (100 - Pout)/p  (exact under
-%   eirp_percentile_maps); off-region percentiles (Pon < 0) take the off
+%   eirp_percentile_maps); off-region percentiles (Pon <= 0) take the off
 %   floor. It is computed POST-HOC from the always-on histogram and must
 %   never perturb the raw streaming path.
 %
@@ -98,14 +98,14 @@ function results = test_activity_weighted_cdf()
     r = runR23AasEirpCdfGrid(struct('aasGeometryPreset','r23_1x3_default', ...
         'numMc',60,'seed',7, ...
         'azGridDeg',-10:5:10,'elGridDeg',-10:5:5,'binEdgesDbm',-100:2:120, ...
-        'percentiles',[5 50 95 99], ...
+        'percentiles',[5 50 81.25 95 99], ...
         'activityWeightedCdf',true,'tddActivityFactor',0.75,'networkLoadingFactor',0.25));
     AW = r.activityWeightedPercentileMaps;
 
     okFrac = abs(AW.activeFraction - 0.1875) < 1e-12;
     okPon  = max(abs(AW.onPercentileEquivalent - ...
         (100 - (100 - r.percentileMaps.percentiles)/0.1875))) < 1e-9;
-    okMask = isequal(AW.inOnRegion, AW.onPercentileEquivalent >= 0);
+    okMask = isequal(AW.inOnRegion, AW.onPercentileEquivalent > 0);
 
     onMask = AW.inOnRegion;
     exp = eirp_percentile_maps(r.stats, AW.onPercentileEquivalent(onMask));
@@ -114,11 +114,18 @@ function results = test_activity_weighted_cdf()
     okOff = all(isinf(AW.values(:,:,~onMask)), 'all') && ...
             all(AW.values(:,:,~onMask) < 0, 'all');
 
-    ok3 = okFrac && okPon && okMask && okRemap && okOff;
+    cutoff = 100 * (1 - AW.activeFraction);
+    kCutoff = find(abs(AW.percentiles - cutoff) < 1e-12, 1);
+    okBoundary = ~isempty(kCutoff) && ~AW.inOnRegion(kCutoff) && ...
+        all(isinf(AW.values(:, :, kCutoff)), 'all') && ...
+        all(AW.values(:, :, kCutoff) < 0, 'all');
+
+    ok3 = okFrac && okPon && okMask && okRemap && okOff && okBoundary;
     results = check(results, ok3, sprintf( ...
         ['T3: ITU example p=0.1875 -> exact Pon remapping vs engine, ', ...
-         'on/off mask, and -Inf off floor (frac=%d Pon=%d mask=%d remap=%d off=%d)'], ...
-        okFrac, okPon, okMask, okRemap, okOff));
+         'on/off mask, exact-boundary off floor, and -Inf off floor ', ...
+         '(frac=%d Pon=%d mask=%d remap=%d off=%d boundary=%d)'], ...
+        okFrac, okPon, okMask, okRemap, okOff, okBoundary));
 
     % ---- T4: peak preserved / not a flat dB shift -------------------
     k99 = find(r.percentileMaps.percentiles == 99, 1);
