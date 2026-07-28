@@ -336,20 +336,20 @@ end
 % opts.aasGeometryPreset='r23_1x3_default'
 % opts.outputFrame='panel' %%%%%%%%%The CTIA heatmap coordinate system
 % % %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-% %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-rev_num=29 % %%: ITU r23 1x3, EIRP + realized-GAIN heatmap
-opts=struct();
-opts.numMc=1000;
-opts.seed=rev_num;
-opts.azGridDeg=-180:2:180; %%%%CTIA grid
-opts.elGridDeg=-90:1:90; %%%%CTIA grid
-opts.binEdgesDbm=[-100:0.1:120];  %%%%%Default is 1dB
-opts.percentiles=unique(sort(horzcat([1:1:99],[0.1:0.1:1],[99:0.1:99.9],0.01, 99.99)));
-opts.aasGeometryPreset='r23_1x3_default'
-opts.outputFrame='panel'
-opts.outputDomain='both' %%%%'eirp' | 'gain' | 'both'
-opts.gainBinEdgesDbi=[-60:0.1:40]; %%%%default is -100:0.5:40
-% %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% % %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% rev_num=29 % %%: ITU r23 1x3, EIRP + realized-GAIN heatmap
+% opts=struct();
+% opts.numMc=1000;
+% opts.seed=rev_num;
+% opts.azGridDeg=-180:2:180; %%%%CTIA grid
+% opts.elGridDeg=-90:1:90; %%%%CTIA grid
+% opts.binEdgesDbm=[-100:0.1:120];  %%%%%Default is 1dB
+% opts.percentiles=unique(sort(horzcat([1:1:99],[0.1:0.1:1],[99:0.1:99.9],0.01, 99.99)));
+% opts.aasGeometryPreset='r23_1x3_default'
+% opts.outputFrame='panel'
+% opts.outputDomain='both' %%%%'eirp' | 'gain' | 'both'
+% opts.gainBinEdgesDbi=[-60:0.1:40]; %%%%default is -100:0.5:40
+% % %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % % %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % rev_num=30 % %% CTIA 1x6, EIRP + gain heatmap
 % opts=struct();
@@ -387,7 +387,7 @@ opts.gainBinEdgesDbi=[-60:0.1:40]; %%%%default is -100:0.5:40
 % Pout maps to the always-on percentile Pon = 100 − (100−Pout)/p.
 % With p=0.1875 the sector is off ~81% of the time, so every percentile at or below 100·(1−p) ≈ 81.25% falls in the off region and takes activityOffFloorDbm (−Inf by default → those cells read −Inf, i.e. off).
 % Only the top ~19% of time-percentiles carry real EIRP. That's the correct "% of time" exceedance behavior, but it will look nothing like a uniformly-dimmed heatmap, so don't expect the whole map to drop ~7 dB.
-% %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% % %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % rev_num=32 %%%%%%Antenna Pointing Histogram for the Example in Rev3 Working Paper
 % opts=struct();
 % opts.numMc=1000;
@@ -401,7 +401,7 @@ opts.gainBinEdgesDbi=[-60:0.1:40]; %%%%default is -100:0.5:40
 % opts.computePointingHistogram=true;
 % opts.outputDomain='both';               % EIRP + antenna gain heatmap
 % opts.gainBinEdgesDbi=[-60:0.1:40];     % finer than default -100:0.5:40
-% % %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% % % %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %Gain output lands in two fields:
 %result.gainPercentileMaps — .values in dBi, same Naz × Nel × P shape as percentileMaps. 
 % This is the gain heatmap per percentile.
@@ -411,13 +411,39 @@ opts.gainBinEdgesDbi=[-60:0.1:40]; %%%%default is -100:0.5:40
 % the peak gain envelope across beams per cell, not a power sum. So far-off-axis cells sit at the floor with near-degenerate distributions; 
 % that's expected.
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+rev_num=33 %%%%%%Antenna Pointing Histogram for the Example in Rev3 Working Paper: 90.8
+opts=struct();
+opts.numMc=2000;
+opts.seed=rev_num;
+opts.azGridDeg=-180:2:180;
+opts.elGridDeg=-90:1:90;
+opts.binEdgesDbm=[-100:0.1:120];
+opts.percentiles=unique(sort(horzcat([1:1:99],[0.1:0.1:1],[99:0.1:99.9],0.01, 99.99)));
+opts.aasGeometryPreset='r23_1x3_default';
+opts.sectorEirpDbm          = 90.8;   % geometry-layer sector EIRP [dBm/100 MHz]
+opts.conductedPowerDbm      = 58.6;   % 90.8 - 32.2 dBi, keeps metadata self-consistent
+opts.maxEirpPerSector_dBm   = 90.8;   % driver-layer override -> params.sectorEirpDbm
+opts.outputFrame='panel';
+opts.computePointingHistogram=true;
+opts.outputDomain='both';               % EIRP + antenna gain heatmap
+opts.gainBinEdgesDbi=[-60:0.1:40];     % finer than default -100:0.5:40
+% % %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+
+
+
+
+
+
+
 
 
 
 %%%%%%%%%%%%%%%%%%%THESE HAVE NOT RUN YET
 
 % % %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-% rev_num=31 % %% rev 36: r23 1x3, CODEBOOK beams (quantized PMI vs ideal steering)
+% rev_num=XX % %% rev 36: r23 1x3, CODEBOOK beams (quantized PMI vs ideal steering)
 % opts=struct();
 % opts.numMc=1000;
 % opts.seed=rev_num;
@@ -430,24 +456,6 @@ opts.gainBinEdgesDbi=[-60:0.1:40]; %%%%default is -100:0.5:40
 % opts.beamSelection='codebook' %%%%default is 'ideal'
 % opts.codebookOversample=[4 4]; %%%%TS 38.214 Table 5.2.2.2.1-2 default
 % % %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-
-
-% %% rev 30: CTIA 1x6, panel frame
-% % %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-% rev_num=30
-% opts=struct();
-% opts.numMc=1000;
-% opts.seed=rev_num;
-% opts.azGridDeg=-180:2:180; %%%%CTIA grid
-% opts.elGridDeg=-90:1:90; %%%%CTIA grid
-% opts.binEdgesDbm=[-100:0.1:120];  %%%%%Default is 1dB
-% opts.percentiles=unique(sort(horzcat([1:1:99],[0.1:0.1:1],[99:0.1:99.9],0.01, 99.99)));
-% opts.aasGeometryPreset='ctia_7ghz_1x6'
-% opts.outputFrame='panel'
-% % %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-% result=runR23AasEirpCdfGrid(opts);
-% % save(sprintf('result_rev%02d.mat',rev_num),'result','-v7.3');
 
 
 
@@ -471,10 +479,10 @@ else
 end
 
 
-plot_eirp_heatmap_steps(struct('result', result));    % bare call also works; it runs the baseline itself
+%%%%%%%%%%%%%%Four Step Plot from UE Beam to EIRP Heatmap
+%plot_eirp_heatmap_steps(struct('result', result));    
 
-'check'
-pause;
+
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
@@ -494,7 +502,7 @@ max(max(result.stats.max_dBm))
 %%%%%%%%%The antenna pointing histogram
 if ~isempty(result.pointingHistogram.counts)
 
-    result.gainStats
+
 
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     h = result.pointingHistogram;         % needs the run to have computePointingHistogram=true
@@ -540,6 +548,32 @@ if ~isempty(result.pointingHistogram.counts)
     toc;
     pause(0.1)
 
+
+    %     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%Create the table for Ant
+    % %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%Pointing Distribution
+    % az = result.gainStats.azGrid;
+    % el = result.gainStats.elGrid;
+    % p  = result.gainStats.binEdges;
+    % V  = result.gainStats.counts;
+    % 
+    % 
+    % [AZ, EL] = ndgrid(az, el);
+    % T_ant_dist = table();
+    % T_ant_dist.az_deg = AZ(:);
+    % size(AZ(:)) %%%1936 x 1
+    % T_ant_dist.el_deg = EL(:);
+    % for k = 1:numel(p)
+    %     colName = sprintf('p%g_dBi', p(k));
+    %     colName = matlab.lang.makeValidName(colName);
+    %     slice = V(:,:,k);        % az x el
+    %     T_ant_dist.(colName) = slice(:);  % 1936 x 1
+    % end
+    % 
+    % 'Writing the table . . .'
+    % tic;
+    % writetable(T_ant_dist, strcat('antenna_gainStats_grid_',num2str(rev_num),'.csv'));
+    % toc;
+    % T_ant_dist
 
 
     % %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%Create a heatmap
@@ -620,33 +654,7 @@ if ~isempty(result.pointingHistogram.counts)
     % toc;
 
 
-    % %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%Create the table for Ant
-    % %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%Pointing Distribution
-    % az = result.gainStats.azGrid;
-    % el = result.gainStats.elGrid;
-    % p  = result.gainStats.binEdges;
-    % V  = result.gainStats.counts;
-    % 
-    % 
-    % 'try to make a 3D histogram?'
-    % pause;
-    % [AZ, EL] = ndgrid(az, el);
-    % T_ant_dist = table();
-    % T_ant_dist.az_deg = AZ(:);
-    % size(AZ(:)) %%%1936 x 1
-    % T_ant_dist.el_deg = EL(:);
-    % for k = 1:numel(p)
-    %     colName = sprintf('p%g_dBi', p(k));
-    %     colName = matlab.lang.makeValidName(colName);
-    %     slice = V(:,:,k);        % az x el
-    %     T_ant_dist.(colName) = slice(:);  % 1936 x 1
-    % end
-    % 
-    % 'Writing the table . . .'
-    % tic;
-    % writetable(T_ant_dist, strcat('antenna_gainStats_grid_',num2str(rev_num),'.csv'));
-    % toc;
-    % T_ant_dist
+
 
 end
 
@@ -675,10 +683,11 @@ if ~isempty(result.gainPercentileMaps.values)
         slice = V(:,:,k);        % az x el
         T_ant_gain.(colName) = slice(:);  % 1936 x 1
     end
+    T_ant_gain
 
     'Writing the table . . .'
     tic;
-    writetable(T_ant_gain, strcat('gainPercentileMaps_grid_',num2str(rev_num),'.csv'));
+    writetable(T_ant_gain, strcat('gainPercentileMaps_grid_',num2str(rev_num),'_',opts.aasGeometryPreset,'_MC',num2str(opts.numMc),'.csv'));
     toc;
 
     array_T_ant_gain=table2array(T_ant_gain);
@@ -754,16 +763,13 @@ if ~isempty(result.gainPercentileMaps.values)
     pause(0.1)
 
 
-    'need to check this plot'
-    pause;
-
 
 
 end
 
 
 
-if ~isempty(result.activityWeightedPercentileMaps.values)
+if ~isempty(result.activityWeightedPercentileMaps)
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     result.activityWeightedPercentileMaps
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -788,7 +794,7 @@ if ~isempty(result.activityWeightedPercentileMaps.values)
 
     'Writing the table'
     tic;
-    writetable(T_activity, strcat('activityWeightedPercentileMaps_grid_',num2str(rev_num),'.csv'));
+    writetable(T_activity, strcat('activityWeightedPercentileMaps_grid_',num2str(rev_num),'_',opts.aasGeometryPreset,'_MC',num2str(opts.numMc),'.csv'));
     toc;
 
     T_activity
@@ -847,7 +853,7 @@ end
 
 'Writing the table'
 tic;
-writetable(T, strcat('eirp_percentile_grid_',num2str(rev_num),'.csv'));
+writetable(T, strcat('eirp_percentile_grid_',num2str(rev_num),'_',opts.aasGeometryPreset,'_MC',num2str(opts.numMc),'.csv'));
 toc;
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
