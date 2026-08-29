@@ -1349,6 +1349,73 @@ the delivered pattern there. The pattern itself is **not** rotated a second
 time. Treating these patterns as sector-frame would apply the mechanical
 downtilt twice.
 
+### Verifying the frame of external pattern data
+
+Deciding whether a delivered pattern file is panel-frame or sector-frame is
+a measurement, not a reading of the metadata — vendor tilt fields are often
+zero-filled regardless. This records the method that works and the one that
+does not, because the obvious calibration is inverted and will send you the
+wrong way.
+
+**What does not work: comparing `outputFrame = 'global'` against
+`'panel'` on a Monte-Carlo envelope.** The intuition is that mechanical
+tilt bows constant-elevation features with azimuth, so the sector-frame
+("global") render should look *more* curved than the panel-frame one.
+Measured on an MC envelope it comes out backwards — `'global'` reads
+*flatter* than `'panel'`.
+
+The reason is that the runner rotates the **steering direction** by the
+mechanical tilt in *both* frames; the frames differ only in whether the
+**observation grid** is rotated too. For `'global'`, grid and steering
+rotate together and the bowing cancels. For `'panel'`, only the steering
+rotates, so the envelope bows. The curvature intuition is sound for a
+**single fixed pattern** and false for an **envelope swept over many
+steering directions** — the very thing an MC run produces. Do not use it
+as a frame check.
+
+**Also unreliable: per-beam curvature at high `|az|`.** These are pencil
+beams. Away from a beam's own main lobe the profile is deep sidelobe
+structure with many near-equal nulls, and the best-fit elevation shift for
+such a column is meaningless — it locks onto whichever null happens to
+score best. Restrict any band-shift metric to a window around boresight
+(the regression test uses `|az| <= 60`), and never read a per-beam number
+from the far azimuth tails.
+
+**What does work: the positive control.** Do not ask "is this pattern
+flat?" — a metric that is broken and always returns zero answers "yes".
+Ask instead whether *the same metric* can detect a tilt you inserted
+yourself:
+
+1. Measure the curvature metric on the data **as delivered**.
+2. Rotate that same data by a known tilt through
+   `imt_aas_mechanical_tilt_transform`.
+3. Re-measure with the identical metric, and confirm it (a) reads clearly
+   nonzero and (b) grows monotonically with the rotation angle.
+
+The data is compared against **itself**, so no cross-frame runner
+convention enters. On the delivered 7 GHz file this reads **0.0000
+as-delivered** versus **0.9884 rotated by 6°** — the metric is alive, and
+the delivered data is flat. `test_imtAasExternalBeamGainFrame` is this
+construction as a regression test (T1–T3), and it exists precisely so the
+"always returns zero" failure cannot pass silently.
+
+**Conclusion for the delivered 7 GHz set.** The patterns are
+**panel-frame with zero sub-array downtilt**. The decisive evidence is
+where the highest-gain codebook entries peak in elevation:
+
+| Hypothesis | Predicted peak elevation | Observed |
+|---|---|---|
+| Sector-frame (3° sub-array + 6° mechanical already baked in) | ≈ −9° | no |
+| Panel-frame + 3° sub-array downtilt | ≈ −3° | no |
+| **Panel-frame, zero downtilt of any kind** | **≈ 0°** | **yes** |
+
+The two joint-highest entries (beams 121 and 136, both 32.1963 dBi) peak at
+el = **−0.80°** and **+0.80°** — straddling boresight symmetrically, which
+is what an untilted array gives. This is what `beamSelection = 'external'`
+assumes, so PR #62's handling is correct: the steering direction is rotated
+into the panel frame and the delivered pattern is evaluated there, never
+rotated a second time.
+
 ### As-delivered sub-array downtilt
 
 The delivered patterns report `subarray_downtilt_deg = 0`, whereas
@@ -1417,16 +1484,52 @@ out.metadata.externalBeamset.coverageFraction
 This is a passive counter — it applies the same `imtAasExternalBeamSelect`
 rule the gain path uses, and never feeds back into EIRP or gain output.
 
-With the delivered 256-entry 7 GHz set, `numMc = 8` with 3 UEs formed just
-**19 of 256** beams; `numMc = 50` reached 59. Peak and upper-tail
-percentiles from a low-coverage run **understate** what the delivered
-codebook can achieve, because the high-gain entries were never selected.
+Measured on the delivered 256-entry 7 GHz set (`r23_1x3_default`, 3 UEs,
+`az -120:2:120`, `el -30:0.2:30`, seeds 3 / 17 / 101):
 
-Treat coverage well under 100% of `numBeams` as not converged. There is no
-universal threshold — coverage depends on seed, UE count and the
-steering-angle distribution — so the check is that coverage **plateaus**
-across increasing `numMc`, not that it clears a fixed number. Do not trust
-an external-vs-ideal or external-vs-codebook comparison until it has.
+| `numMc` | unique beams (seed 3 / 17 / 101) | % of 256 | worst-seed peak gap |
+|---:|:---|---:|---:|
+| 8 | 19 / 21 / 20 | 7–8 % | 0.2496 dB |
+| 25 | 42 / 42 / 43 | 16–17 % | 0.1208 dB |
+| 50 | 59 / 61 / 56 | 22–24 % | 0.0013 dB |
+| 100 | 75 / 76 / 75 | 29–30 % | 0.0013 dB |
+| 200 | 86 / 87 / 89 | 34–35 % | 0.0013 dB |
+| 400 | 99 / 98 / 94 | 37–39 % | 0.0007 dB |
+| 800 | 102 / 101 / 100 | 39–40 % | 0.0007 dB |
+| 1600 | 102 / 101 / 101 | 39–40 % | 0.0007 dB |
+| 3200 | 102 / 102 / 101 | 39–40 % | 0.0007 dB |
+| 6400 | 102 / 102 / 101 | 39–40 % | 0.0007 dB |
+
+Coverage is a property of the **steering directions**, not of the output
+grid: the selected-beam *set* is identical at `el` steps of 0.2°, 2° and
+5°, so this curve can be measured cheaply on a coarse grid. Extended that
+way to `numMc = 25600` (76 800 beam-directions), all three seeds sit at
+**102**.
+
+**Coverage saturates near 102 of 256 (≈ 40 %), not at 256** — and that
+ceiling is imposed by the deployment, not by the codebook:
+
+* Swept over the **full delivered pattern domain**, every one of the 256
+  entries is the max-gain choice *somewhere*: **256 / 256** are selectable.
+  There are no dead or dominated entries in the file.
+* Restricted to the **panel-frame steering directions this scenario
+  actually produces** (`az` ∈ [−59.9°, +59.9°], `el` ∈ [−6.96°, +3.64°]),
+  only **128 / 256** remain selectable.
+* Of those, **102** are ever actually selected, because the steering
+  distribution does not fill that box uniformly.
+
+> **Do not read "coverage well under 100 %" as "not converged".** For this
+> delivered set 100 % is unreachable by construction, so that reading sends
+> you chasing draw counts that cannot help. The check is that coverage has
+> **plateaued**: compare `uniqueBeamsSelected` at `numMc` and `2 x numMc`
+> and require the count to stop moving.
+
+The unexercised entries do **not** understate the envelope *peak*: the best
+peak gain among beams never selected in any run is **31.4980 dBi**, a full
+**0.6983 dB below** the file's 32.1963 dBi maximum. What goes unexercised
+are entries serving elevations this deployment never steers to. Upper-tail
+percentiles from a run that has not yet plateaued are still understated,
+which is what the plateau check is for.
 
 ### Where the reported peak shortfall comes from
 
@@ -1443,10 +1546,58 @@ At the original 2° grid the split was grid 0.6190 / coverage 0.1166, so the
 grid term dominated. But the grid term is about resolving the peaks of the
 beams that **were** selected — it has nothing to do with sampling
 `el = −0.8°`, the peak elevation of the file's own best beams. Adding
-`el = −0.8` to the grid gives a **bit-identical** result, because beams
-120/121/136/137 — the four that tie for the 32.1963 dBi peak — are not
-selected at all at `numMc = 8`. Any explanation phrased as "the grid does
-not sample el = −0.8" is wrong, and this null result is the evidence.
+`el = −0.8` to the grid gives a **bit-identical** result, because the
+peak-owning entries are not selected at all at `numMc = 8`, seed 3. Any
+explanation phrased as "the grid does not sample el = −0.8" is wrong, and
+this null result is the evidence.
+
+The peak is owned by a **cluster of four mirror-related entries**, not one
+beam: 121 and 136 tie exactly at 32.196274 dBi (peaks at
+`az = ∓2.0°, el = ∓0.8°`), and 120 / 137 sit 8 × 10⁻⁶ dB lower at
+32.196266. Only these four are within 0.5 dB of the maximum — the next
+entry is 0.70 dB down — so the coverage term collapses the moment **any
+one** of the four is selected, not when a particular one is.
+
+Both terms are seed-dependent, and coverage is the one that moves. At seed
+101 an entry of the cluster (136) is already selected at `numMc = 8` and
+the gap there is 0.0013 dB on the 0.2° grid; at seed 3 the first cluster
+member (137) arrives by `numMc = 25`, while beam 121 itself does not appear
+until between draw 400 and 800. Treat the decomposition above as a **seed-3
+worked example**, not as a fixed property of the file.
+
+### Recommended minimum `numMc` for external-beam runs
+
+**Use `numMc >= 800` for any external-beamset run whose output is quoted as
+an envelope or an upper-tail percentile.** At 800 draws all three seeds have
+reached the coverage plateau (100–102 of the 102 attainable entries), every
+member of the peak-gain cluster has been exercised, and the peak gap sits at
+the 0.0007 dB rounding floor — below 800 the beam census is still climbing,
+so the codebook is only partly sampled.
+
+Measured across seeds 3 / 17 / 101 on the delivered 7 GHz file:
+
+| Criterion | Threshold | First satisfied at |
+|---|---|---|
+| MC peak gap vs the direct-path reference | < 0.1 dB, worst seed, and stays there | `numMc` = **50** |
+| Unique-beam coverage | plateaued (no growth at `2 x numMc`) | `numMc` = **800** |
+| p50 gain map, RMS change | < 0.1 dB | **never reached** — see below |
+
+Coverage is the binding criterion: the peak recovers roughly 16× earlier
+than the beam census does, because only four near-identical entries own the
+maximum and any one of them recovers it. A run that clears only the peak
+criterion is **not** enough to support an external-vs-ideal comparison.
+
+**The p50 map does not reach 0.1 dB RMS, and cannot with the default
+bins.** Successive-refinement RMS (`p50` at `numMc` vs at `2 x numMc`,
+restricted to cells within 40 dB of the map peak) falls from 3.6–3.9 dB at
+`numMc = 8` to 0.32–0.44 dB at 3200 → 6400, and seed-to-seed RMS at
+`numMc = 6400` is still 0.49 dB. Part of that residual is not sampling
+noise at all: `gainBinEdgesDbi` defaults to 0.5 dB bins, and the percentile
+maps are histogram-derived, so differencing two independently quantised maps
+has an RMS floor of about **0.20 dB** on its own. A sub-0.1 dB RMS criterion
+on `p50` is therefore unattainable regardless of draw count — tighten
+`opts.gainBinEdgesDbi` first if a percentile map has to be converged to
+better than a few tenths of a dB.
 
 ### Provenance
 

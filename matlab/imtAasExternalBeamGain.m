@@ -21,6 +21,16 @@ function [compositeGainDbi, sel] = imtAasExternalBeamGain(azGridDeg, ...
 %   performs the sector->panel rotation before calling this function; the
 %   pattern is never rotated again here.
 %
+%   To VERIFY that claim against a new delivery, use the positive control:
+%   measure a curvature metric as-delivered, rotate the same data by a known
+%   tilt through imt_aas_mechanical_tilt_transform, and confirm the same
+%   metric detects it. Do NOT try to calibrate by comparing
+%   outputFrame 'global' against 'panel' on an MC envelope -- that reads
+%   INVERTED, because the runner rotates the steering direction in both
+%   frames and only the observation grid differs. See the README section
+%   "Verifying the frame of external pattern data" and
+%   test_imtAasExternalBeamGainFrame.
+%
 %   BEAM SELECTION (OPTS.mode):
 %     'exhaustive' (DEFAULT) -- evaluate EVERY beam's gain at the single
 %         requested (steerAz, steerEl) and take the argmax. This is the
