@@ -58,6 +58,13 @@ function compositeGainDbi = imtAasCompositeGain(azGridDeg, elGridDeg, ...
     %                        (skip the observation-grid rotation).
     obsFrame = resolveObservationFrame(params, 'imtAasCompositeGain');
 
+    % External beam set (non-breaking; default absent/disabled).
+    %   Absent / empty / enable=false -> byte-identical to the historical
+    %   analytic element-pattern + array-factor path below.
+    %   enable=true -> the delivered vendor patterns REPLACE both factors.
+    extBeamset = resolveExternalBeamset(params, 'imtAasCompositeGain');
+    useExternal = ~isempty(extBeamset);
+
     % The BEAM-STEERING direction is ALWAYS rotated from the sector frame
     % into the panel frame, regardless of the observation-frame choice.
     [steerAzPanel, steerElPanel] = ...
@@ -90,11 +97,24 @@ function compositeGainDbi = imtAasCompositeGain(azGridDeg, elGridDeg, ...
         ELpanel = ELpanel(:);
     end
 
-    elementDb = imtAasElementPattern(AZpanel, ELpanel, params);
-    arrayDb   = imtAasArrayFactor( ...
-        AZpanel, ELpanel, steerAzPanel, steerElPanel, params);
+    if useExternal
+        % The delivered patterns are ABSOLUTE composite gain: they already
+        % contain the element pattern, the sub-array factor and the array
+        % factor, so imtAasElementPattern / imtAasArrayFactor are skipped
+        % entirely rather than added on top. AZpanel/ELpanel and the
+        % steering are PANEL-FRAME, matching the beam set's own
+        % convention (its metadata tilt fields are all 0), so the pattern
+        % is not rotated a second time here.
+        compositeGainDbi = imtAasExternalBeamGain(AZpanel, ELpanel, ...
+            steerAzPanel, steerElPanel, extBeamset.beamset, ...
+            struct('mode', extBeamset.mode));
+    else
+        elementDb = imtAasElementPattern(AZpanel, ELpanel, params);
+        arrayDb   = imtAasArrayFactor( ...
+            AZpanel, ELpanel, steerAzPanel, steerElPanel, params);
 
-    compositeGainDbi = elementDb + arrayDb;
+        compositeGainDbi = elementDb + arrayDb;
+    end
     if reshapeForArrayFactor
         compositeGainDbi = reshape(compositeGainDbi, outShape);
     end
@@ -128,6 +148,65 @@ function frame = resolveObservationFrame(params, funcName)
                 ['observationFrame must be one of ''global'', ''sector'', ', ...
                  '''panel'' (got ''%s'').'], frame);
     end
+end
+
+function ext = resolveExternalBeamset(params, funcName)
+%RESOLVEEXTERNALBEAMSET Read + validate the optional params.externalBeamset.
+%   Returns [] (the historical analytic path) when the field is absent,
+%   empty, or has enable = false. Otherwise returns a struct with
+%   .beamset (the imtAasLoadExternalBeamset output) and .mode (the
+%   imtAasExternalBeamGain selection mode).
+%
+%   params.beamCodebook.enable and params.externalBeamset.enable are
+%   mutually exclusive: the codebook hook snaps the analytic steering to a
+%   DFT grid, which is meaningless when the analytic array factor is not
+%   evaluated at all.
+    ext = [];
+    if ~isstruct(params) || ~isfield(params, 'externalBeamset') || ...
+            isempty(params.externalBeamset)
+        return;
+    end
+    raw = params.externalBeamset;
+    if ~isstruct(raw) || ~isscalar(raw)
+        error([funcName ':invalidExternalBeamset'], ...
+            'params.externalBeamset must be a scalar struct (or [] / absent).');
+    end
+    if ~isfield(raw, 'enable') || isempty(raw.enable)
+        return;
+    end
+    if ~((islogical(raw.enable) || isnumeric(raw.enable)) && isscalar(raw.enable))
+        error([funcName ':invalidExternalBeamset'], ...
+            'params.externalBeamset.enable must be a logical scalar.');
+    end
+    if ~logical(raw.enable)
+        return;
+    end
+
+    codebookOn = isstruct(params) && isfield(params, 'beamCodebook') && ...
+        ~isempty(params.beamCodebook) && isstruct(params.beamCodebook) && ...
+        isfield(params.beamCodebook, 'enable') && ...
+        ~isempty(params.beamCodebook.enable) && logical(params.beamCodebook.enable);
+    if codebookOn
+        error([funcName ':conflictingBeamSelection'], ...
+            ['params.beamCodebook.enable and params.externalBeamset.enable ', ...
+             'are mutually exclusive: the Type I DFT codebook snaps the ', ...
+             'analytic steering, but the external beam set replaces the ', ...
+             'analytic array factor entirely. Choose beamSelection ', ...
+             '''codebook'' OR ''external'', not both.']);
+    end
+
+    if ~isfield(raw, 'beamset') || isempty(raw.beamset)
+        error([funcName ':invalidExternalBeamset'], ...
+            ['params.externalBeamset.enable is true but ', ...
+             'params.externalBeamset.beamset is missing or empty.']);
+    end
+
+    mode = 'exhaustive';
+    if isfield(raw, 'mode') && ~isempty(raw.mode)
+        mode = char(string(raw.mode));
+    end
+
+    ext = struct('beamset', raw.beamset, 'mode', mode);
 end
 
 function validateSteerAngle(value, lo, hi, name)
