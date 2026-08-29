@@ -142,6 +142,51 @@ function out = runR23AasEirpCdfGrid(varargin)
 %       / out.metadata.externalBeamFile / .externalBeamsetChecksum /
 %       .numExternalBeams / .externalBeamset (light descriptor; the beam
 %       tensor is never copied into metadata or into out.params).
+%
+%   BEAM COVERAGE (external mode only) -- read this before comparing
+%   'external' against 'ideal' / 'codebook':
+%       out.metadata.externalBeamset.uniqueBeamsSelected
+%       out.metadata.externalBeamset.numBeams
+%       out.metadata.externalBeamset.coverageFraction
+%       report how many DISTINCT codebook entries were actually formed
+%       across the whole run. This is a passive counter: it uses the same
+%       imtAasExternalBeamSelect rule the gain path applies, and never feeds
+%       back into EIRP/gain output.
+%
+%       Why it matters. 'ideal' and 'codebook' synthesize a beam
+%       continuously for whatever direction each draw asks for, so they can
+%       never "miss" a beam. 'external' can only ever use entries of a
+%       FINITE delivered codebook, and a low-numMc run touches only a
+%       fraction of them. With the delivered 256-entry 7 GHz set, numMc = 8
+%       with 3 UEs formed just 19 of 256 beams; numMc = 50 reached 59.
+%       Peak and upper-tail percentiles from a low-coverage run therefore
+%       UNDERSTATE what the delivered codebook can achieve, because the
+%       high-gain entries were simply never selected.
+%
+%       Rule of thumb: treat coverage well under 100% of numBeams as "not
+%       converged". There is no universal threshold -- coverage depends on
+%       the seed, the UE count and the steering-angle distribution -- so the
+%       check is that coverage PLATEAUS across increasing numMc, not that it
+%       exceeds a fixed number. Do not trust an external-vs-ideal or
+%       external-vs-codebook comparison until it has.
+%
+%   Worked example -- where the reported peak shortfall actually comes from.
+%   Against the delivered 7 GHz file (direct-path reference
+%   max(pmi_env(:)) = 32.1963 dBi), a numMc = 8 run peaked 0.7356 dB low.
+%   That shortfall decomposes into TWO independent terms:
+%       coverage : 32.1963 - max(peakGainDbi over the beams actually
+%                  selected) = 0.1166 dB. Fixed by more draws, NOT by a
+%                  finer grid; it is identical at every grid step.
+%       grid     : the remainder, from rendering the selected beam's peak
+%                  onto a finite output grid. 0.6190 dB at a 2 deg
+%                  elevation step, 0.1330 dB at 0.2 deg.
+%   So at the ORIGINAL 2 deg grid the split was grid 0.6190 / coverage
+%   0.1166 -- grid dominated. NOTE the grid term is about resolving the
+%   peaks of the beams that WERE selected; it has nothing to do with
+%   sampling el = -0.8 deg (the peak elevation of the delivered file's own
+%   best beams). Adding el = -0.8 to the grid produces a BIT-IDENTICAL
+%   result, because beams 120/121/136/137 -- the four that tie for the
+%   32.1963 dBi peak -- are not selected at all at numMc = 8.
 %       See imt_aas_dft_codebook / imt_aas_codebook_select for the
 %       construction, the max-gain == nearest-bin property, and the
 %       aliasing (grating lobe) caveat for the d_V = 2.1 lambda stack.
@@ -652,6 +697,14 @@ function out = runR23AasEirpCdfGrid(varargin)
     % + array factor. The delivered files are ~689 MB / 1.33 GB resident
     % and MAT v7 (no partial loading), so a per-draw load would be fatal.
     externalBeamsetResolved = resolveExternalBeamset(opts, geom);
+    % Passive beam-coverage counter (external mode only). A logical "seen"
+    % flag per codebook entry, OR-ed once per draw. It reads nothing from the
+    % gain path and feeds nothing back into it, so EIRP/gain outputs are
+    % bit-identical whether or not it runs.
+    externalBeamSeen = [];
+    if externalBeamsetResolved.enable
+        externalBeamSeen = false(externalBeamsetResolved.beamset.numBeams, 1);
+    end
     if externalBeamsetResolved.enable
         % Attached ONLY when enabled, so the params struct on the
         % 'ideal'/'codebook' paths keeps its exact historical field set.
@@ -1079,6 +1132,13 @@ function out = runR23AasEirpCdfGrid(varargin)
             'tally', zeros(1, double(opts.maxUesPerSector)), 'numSnapshots', 0);
     end
 
+    % Same mechanical downtilt imtAasCompositeGain applies to the steering
+    % direction before evaluating the external patterns (panel frame).
+    tiltForCoverage = 0;
+    if isfield(params, 'mechanicalDowntiltDeg') && ~isempty(params.mechanicalDowntiltDeg)
+        tiltForCoverage = params.mechanicalDowntiltDeg;
+    end
+
     tStart = tic;
     [hWaitbar_ml_mc_chunks,hWaitbarMsgQueue_ml_mc_chunks]= ParForWaitbarCreateMH_time('Number of MC: ',numMc);    %%%%%%% Create ParFor Waitbar, this one covers points and chunks
     nDone = 0;
@@ -1184,6 +1244,20 @@ function out = runR23AasEirpCdfGrid(varargin)
             if isempty(prbAgg.config)
                 prbAgg.config = pw.config;
             end
+        end
+
+        % ---- beam-coverage diagnostic (external mode; passive) -------
+        % Uses imtAasExternalBeamSelect -- the SAME rule imtAasCompositeGain
+        % applies internally -- on this draw's final beam list (after any
+        % layering / PRB weighting), so the count reflects the beams actually
+        % formed. Cost is one bracketed gather per steering direction; the
+        % result is never read back into the gain path.
+        if ~isempty(externalBeamSeen)
+            [saP_, seP_] = imt_aas_mechanical_tilt_transform( ...
+                beams.steerAzDeg(:), beams.steerElDeg(:), tiltForCoverage);
+            idx_ = imtAasExternalBeamSelect(saP_, seP_, ...
+                params.externalBeamset.beamset, params.externalBeamset.mode);
+            externalBeamSeen(idx_) = true;
         end
 
         sectorOut = imtAasSectorEirpGridFromBeams( ...
@@ -1531,6 +1605,8 @@ function out = runR23AasEirpCdfGrid(varargin)
             'frequencyLabel',   bsMeta.frequencyLabel, ...
             'frequencyNote',    bsMeta.frequencyNote, ...
             'loadSeconds',      bsMeta.loadSeconds, ...
+            'uniqueBeamsSelected', sum(externalBeamSeen), ...
+            'coverageFraction', sum(externalBeamSeen) / numel(externalBeamSeen), ...
             'notes',            bsMeta.notes, ...
             'metadataRaw',      bsMeta.metadataRaw);
     else

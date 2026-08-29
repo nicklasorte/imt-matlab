@@ -97,17 +97,12 @@ function [compositeGainDbi, sel] = imtAasExternalBeamGain(azGridDeg, ...
     steerElEval = steerElDeg;
 
     % ---- beam selection ----------------------------------------------
-    switch mode
-        case 'exhaustive'
-            gainsAtSteer = beamGainsAtPoint(G, az, el, ...
-                steerAzEval, steerElEval, floorDbi);
-            [bestGain, beamIndex] = max(gainsAtSteer);
-        case 'nearestPeak'
-            beamIndex = nearestPeakBeam(beamset, steerAzEval, steerElEval);
-            gainsAtSteer = beamGainsAtPoint(G, az, el, ...
-                steerAzEval, steerElEval, floorDbi, beamIndex);
-            bestGain = gainsAtSteer(1);
-    end
+    % Delegated to imtAasExternalBeamSelect, which is the single definition
+    % of the selection rule. The runR23AasEirpCdfGrid beam-coverage
+    % diagnostic calls the same function, so the reported coverage can never
+    % drift from the selection actually performed here.
+    [beamIndex, bestGain] = imtAasExternalBeamSelect( ...
+        steerAzEval, steerElEval, beamset, mode);
 
     % ---- evaluate the selected beam over the full requested grid ------
     [AZ, EL] = imtAasNormalizeGrid(azGridDeg, elGridDeg);
@@ -132,68 +127,6 @@ function [compositeGainDbi, sel] = imtAasExternalBeamGain(azGridDeg, ...
 end
 
 % =====================================================================
-
-function gains = beamGainsAtPoint(G, az, el, aq, eq, floorDbi, beamSubset)
-%BEAMGAINSATPOINT Bilinear gain of every beam at ONE (az, el) point.
-%   Resolves the bracketing cell once and combines the four corners across
-%   the whole beam dimension in a single vectorized expression. This is
-%   the hot path: it runs once per steering direction per Monte Carlo
-%   draw, so it must never loop over beams or call interp2 per beam.
-    numBeams = size(G, 3);
-    if nargin >= 7 && ~isempty(beamSubset)
-        beamIdx = beamSubset;
-    else
-        beamIdx = 1:numBeams;
-    end
-
-    [i0, i1, ta, okA] = bracket(az, aq);
-    [j0, j1, tb, okE] = bracket(el, eq);
-    if ~(okA && okE)
-        gains = repmat(floorDbi, numel(beamIdx), 1);
-        return;
-    end
-
-    g00 = reshape(G(i0, j0, beamIdx), [], 1);
-    g10 = reshape(G(i1, j0, beamIdx), [], 1);
-    g01 = reshape(G(i0, j1, beamIdx), [], 1);
-    g11 = reshape(G(i1, j1, beamIdx), [], 1);
-
-    gains = (1 - ta) * (1 - tb) * g00 + ta * (1 - tb) * g10 + ...
-            (1 - ta) * tb       * g01 + ta * tb       * g11;
-end
-
-function [i0, i1, t, ok] = bracket(axisVec, q)
-%BRACKET Index pair and fractional weight for a query on a sorted axis.
-    n = numel(axisVec);
-    ok = true;
-    if q < axisVec(1) || q > axisVec(end)
-        i0 = 1; i1 = 1; t = 0; ok = false;
-        return;
-    end
-    if n == 1
-        i0 = 1; i1 = 1; t = 0;
-        return;
-    end
-    i0 = find(axisVec <= q, 1, 'last');
-    if i0 >= n
-        i0 = n - 1;
-    end
-    i1 = i0 + 1;
-    den = axisVec(i1) - axisVec(i0);
-    if den <= 0
-        t = 0;
-    else
-        t = (q - axisVec(i0)) / den;
-    end
-end
-
-function idx = nearestPeakBeam(beamset, aq, eq)
-%NEARESTPEAKBEAM Great-circle nearest recorded peak direction.
-    pa = beamset.peakAzDeg(:);
-    pe = beamset.peakElDeg(:);
-    cosSep = sind(pe) * sind(eq) + cosd(pe) .* cosd(eq) .* cosd(pa - aq);
-    [~, idx] = max(cosSep);
-end
 
 function q = wrapIntoDomain(q, axisVec)
 %WRAPINTODOMAIN Wrap azimuth into the delivered domain when it spans 360.

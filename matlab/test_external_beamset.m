@@ -17,6 +17,9 @@ function results = test_external_beamset()
 %       T8.  Runner error identifiers.
 %       T9.  Works with BOTH outputFrame='global' and 'panel'.
 %       T10. 'internal' alias normalizes to 'ideal'.
+%       T11. Nothing is shape-hardcoded: loader + gain lookup work on
+%            beam sets with DIFFERENT beam counts and grid sizes.
+%       T12. Beam-coverage diagnostic is present, correct, and passive.
 %
 %   All fixtures are SMALL synthetic MAT files built under tempname and
 %   removed via onCleanup. This test never touches the proprietary PMI
@@ -67,6 +70,8 @@ function results = test_external_beamset()
     checks = t8_runner_errors(checks, fx);
     checks = t9_frames(checks, fx);
     checks = t10_internal_alias(checks, fx);
+    checks = t11_multi_shape(checks, tmpDir);
+    checks = t12_coverage(checks, fx);
 
     nPass = sum([checks.passed]);
     nTot  = numel(checks);
@@ -443,6 +448,79 @@ function r = t10_internal_alias(r, ~)
 end
 
 % =====================================================================
+% T11 - shape independence
+% =====================================================================
+function r = t11_multi_shape(r, tmpDir)
+%T11 The six delivered files all happen to carry 256 beams
+%   (N1*O1*N2*O2 = 256 in every case), so differing beam counts cannot be
+%   exercised with real data. Synthetic fixtures cover it instead: two beam
+%   sets with different numBeams AND different az/el grid sizes.
+    specs = { struct('nB', 5,  'az', -180:10:180, 'el', -90:10:90), ...
+              struct('nB', 12, 'az', -180:4:180,  'el', -60:2:60) };
+    ok = true; detail = '';
+    for i = 1:numel(specs)
+        sp = specs{i};
+        pth = fullfile(tmpDir, sprintf('shape%d.mat', i));
+        writeShapeFixture(pth, sp.nB, sp.az, sp.el);
+        bs = imtAasLoadExternalBeamset(pth, struct('computeChecksum', false));
+        okN  = (bs.numBeams == sp.nB);
+        okSz = isequal(size(bs.gainDbi), [numel(sp.az), numel(sp.el), sp.nB]);
+        okAx = numel(bs.azDeg) == numel(sp.az) && numel(bs.elDeg) == numel(sp.el);
+        % every beam's own recorded peak must round-trip through selection
+        okRt = true;
+        for k = 1:sp.nB
+            [g, sel] = imtAasExternalBeamGain(bs.peakAzDeg(k), bs.peakElDeg(k), ...
+                bs.peakAzDeg(k), bs.peakElDeg(k), bs);
+            okRt = okRt && (sel.beamIndex == k) && ...
+                   abs(g - bs.peakGainDbi(k)) < 1e-9;
+        end
+        ok = ok && okN && okSz && okAx && okRt;
+        detail = [detail sprintf('[nB=%d %dx%d N=%d sz=%d ax=%d rt=%d]', ...
+            sp.nB, numel(sp.az), numel(sp.el), okN, okSz, okAx, okRt)]; %#ok<AGROW>
+    end
+    r = check(r, ok, ['T11: shape independence ' detail]);
+end
+
+% =====================================================================
+% T12 - beam-coverage diagnostic
+% =====================================================================
+function r = t12_coverage(r, fx)
+    o = mcOpts();
+    o.beamSelection    = 'external';
+    o.externalBeamFile = fx.good;
+    o.outputDomain     = 'gain';     % gainStats is absent without this
+    out = runR23AasEirpCdfGrid(o);
+    eb  = out.metadata.externalBeamset;
+
+    okFields = isfield(eb,'uniqueBeamsSelected') && isfield(eb,'numBeams') && ...
+               isfield(eb,'coverageFraction');
+    u = eb.uniqueBeamsSelected; n = eb.numBeams;
+    okRange = u >= 1 && u <= n && n == 8;
+    okFrac  = abs(eb.coverageFraction - u/n) < 1e-12;
+
+    % PASSIVE: the counter must not perturb any numeric output. Same seed
+    % twice -> identical maps, and identical to the pre-existing gain path.
+    out2 = runR23AasEirpCdfGrid(o);
+    okPassive = isequal(out.percentileMaps.values, out2.percentileMaps.values) && ...
+                isequal(out.gainStats.max_dBm, out2.gainStats.max_dBm);
+
+    % More draws must not DECREASE coverage (monotone in draws).
+    baseOpts = mcOpts();
+    oMore = o; oMore.numMc = baseOpts.numMc * 4;
+    outMore = runR23AasEirpCdfGrid(oMore);
+    okMono = outMore.metadata.externalBeamset.uniqueBeamsSelected >= u;
+
+    % Absent for non-external runs (byte-compat).
+    outIdeal = runR23AasEirpCdfGrid(mcOpts());
+    okAbsent = isempty(outIdeal.metadata.externalBeamset);
+
+    ok = okFields && okRange && okFrac && okPassive && okMono && okAbsent;
+    r = check(r, ok, sprintf(['T12: coverage diagnostic %d/%d beams ' ...
+        '(fields=%d range=%d frac=%d passive=%d monotone=%d absentWhenIdeal=%d)'], ...
+        u, n, okFields, okRange, okFrac, okPassive, okMono, okAbsent));
+end
+
+% =====================================================================
 % Fixtures
 % =====================================================================
 function writeGoodFixture(path)
@@ -486,6 +564,30 @@ function writeWeightsFixture(path)
     weights = complex(randn(64, 4), randn(64, 4));   % preset implies 768
     metadata = '{"antenna_definition": "synthetic_weights_fixture"}';
     save(path, 'weights', 'metadata');
+end
+
+function writeShapeFixture(path, nB, az, el)
+%WRITESHAPEFIXTURE Beam set of arbitrary beam count / grid size.
+    nAz = numel(az); nEl = numel(el);
+    % Peaks must sit EXACTLY on grid nodes, or each beam's recorded argmax
+    % peak lands on a neighbouring node and the round-trip assertion becomes
+    % a coin flip between adjacent beams. Beams are separated in azimuth
+    % only, with distinct peak gains, so the argmax is unambiguous.
+    azIdx = unique(round(linspace(0.30*nAz, 0.70*nAz, nB)));
+    assert(numel(azIdx) == nB, 'shape fixture: az grid too coarse for %d beams', nB);
+    elIdx = repmat(round((nEl+1)/2), 1, nB);
+    peakAz = az(azIdx); peakEl = el(elIdx);
+    peakGain = 30 - 0.1 * (0:nB-1);
+    beams = zeros(nB, nEl, nAz);
+    [AZ, EL] = meshgrid(az, el);
+    for i = 1:nB
+        dAz = mod(AZ - peakAz(i) + 180, 360) - 180;
+        beams(i,:,:) = max(peakGain(i) - 40*(dAz/45).^2 - 40*((EL-peakEl(i))/45).^2, -25);
+    end
+    pmi_env = reshape(max(beams, [], 1), [nEl, nAz]);
+    metadata = jsonencode(struct('antenna_definition','synthetic_shape_fixture', ...
+        'num_beams', nB));
+    save(path, 'beams', 'az', 'el', 'pmi_env', 'metadata');
 end
 
 function [beams, az, el, pmi_env, metadata] = buildFixture()

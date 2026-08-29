@@ -1401,6 +1401,53 @@ consistent, not a mismatch.
 * `'nearestPeak'` — pick the beam whose recorded peak direction is nearest
   the request. Cheaper, but ignores pattern shape.
 
+### Beam coverage — read before comparing external against ideal/codebook
+
+`'ideal'` and `'codebook'` synthesize a beam continuously for whatever
+direction each draw asks for, so they can never miss a beam. `'external'`
+can only use entries of a **finite** delivered codebook, and a low-`numMc`
+run touches only a fraction of them. Every external run therefore reports:
+
+```
+out.metadata.externalBeamset.uniqueBeamsSelected
+out.metadata.externalBeamset.numBeams
+out.metadata.externalBeamset.coverageFraction
+```
+
+This is a passive counter — it applies the same `imtAasExternalBeamSelect`
+rule the gain path uses, and never feeds back into EIRP or gain output.
+
+With the delivered 256-entry 7 GHz set, `numMc = 8` with 3 UEs formed just
+**19 of 256** beams; `numMc = 50` reached 59. Peak and upper-tail
+percentiles from a low-coverage run **understate** what the delivered
+codebook can achieve, because the high-gain entries were never selected.
+
+Treat coverage well under 100% of `numBeams` as not converged. There is no
+universal threshold — coverage depends on seed, UE count and the
+steering-angle distribution — so the check is that coverage **plateaus**
+across increasing `numMc`, not that it clears a fixed number. Do not trust
+an external-vs-ideal or external-vs-codebook comparison until it has.
+
+### Where the reported peak shortfall comes from
+
+Against the delivered 7 GHz file (direct-path reference
+`max(pmi_env(:)) = 32.1963 dBi`), a `numMc = 8` run peaks 0.7356 dB low.
+That shortfall is **two independent terms**, both measured:
+
+| Term | Value | Fixed by |
+|---|---|---|
+| Coverage — `32.1963 −` best peak among *selected* beams | 0.1166 dB | more draws (identical at every grid step) |
+| Grid — rendering the selected beam's peak onto a finite grid | 0.6190 dB @ 2° el step; 0.1330 dB @ 0.2° | finer grid |
+
+At the original 2° grid the split was grid 0.6190 / coverage 0.1166, so the
+grid term dominated. But the grid term is about resolving the peaks of the
+beams that **were** selected — it has nothing to do with sampling
+`el = −0.8°`, the peak elevation of the file's own best beams. Adding
+`el = −0.8` to the grid gives a **bit-identical** result, because beams
+120/121/136/137 — the four that tie for the 32.1963 dBi peak — are not
+selected at all at `numMc = 8`. Any explanation phrased as "the grid does
+not sample el = −0.8" is wrong, and this null result is the evidence.
+
 ### Provenance
 
 `out.metadata` carries `beamSelection`, `externalBeamFile`,
