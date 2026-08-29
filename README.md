@@ -1281,6 +1281,140 @@ byte-identical to before. The SSB sweep is a broadcast duty-cycle model,
 not full per-UE CSI-RS / PMI codebook selection (that lives in the
 separate `opts.beamSelection = 'codebook'` path).
 
+## External PMI beam sets (`beamSelection = 'external'`)
+
+`runR23AasEirpCdfGrid` can be driven from an **external** delivered PMI /
+codebook beam set — vendor-simulated or measured absolute composite-gain
+patterns — instead of the internal analytic element-pattern + array-factor
+model. This is additive: omitting the new options leaves every existing
+result byte-identical.
+
+```matlab
+opts = struct();
+opts.aasGeometryPreset = 'r23_1x3_default';
+opts.beamSelection     = 'external';
+opts.externalBeamFile  = '/path/to/pmi_codebook.mat';
+result = runR23AasEirpCdfGrid(opts);
+```
+
+`opts.beamSelection` accepts `'ideal'` (default), `'codebook'`,
+`'external'`, and `'internal'` as an alias for `'ideal'`. The default
+remains `'ideal'`, and `out.metadata.beamSelection` still reports `'ideal'`
+when the option is omitted.
+
+### Expected MAT schema
+
+Determined by inspection of the delivered files (e.g.
+`7p4_N1-8_N2-8_N-16_M-8_SA3x1_O2x2_T0.mat`):
+
+| Variable | Class / size | Meaning |
+|---|---|---|
+| `beams` | `double [numBeams x numEl x numAz]` | **Absolute composite gain in dBi.** Beam *i* is `squeeze(beams(i,:,:))`. |
+| `az` | `double [1 x numAz]` | Azimuth samples, degrees, strictly increasing. |
+| `el` | `double [1 x numEl]` | Elevation samples, degrees, strictly increasing. |
+| `metadata` | `char [1 x N]` | **JSON string**, not a struct. Decoded with `jsondecode`. |
+| `pmi_env` | `double [numEl x numAz]` | Envelope; must equal `squeeze(max(beams,[],1))`. |
+
+Notes on the delivered data:
+
+* Values are **absolute composite gain in dBi** — the element pattern,
+  sub-array factor and array factor are already included. Nothing is added
+  on top downstream.
+* The beam dimension is **first** in the file. The loader permutes to the
+  canonical `[nAz x nEl x numBeams]` order so each beam page is contiguous.
+* There is **no zero padding**. A `-300` dBi null sentinel appears at a
+  couple of points; real pattern data covers the whole delivered domain.
+  Out-of-domain requests return `beamset.gainFloorDbi`, never `0` dBi,
+  which would otherwise be read as a real 0 dBi gain.
+* **PMI index ordering is arbitrary** (the vendor's own documentation says
+  so) and is never used to select a beam.
+* Files are MAT **v7**, so `matfile` partial loading re-inflates the whole
+  tensor on every access. The loader therefore performs exactly one
+  `load()`, before the Monte Carlo loop — never per draw. A small
+  `<file>.peakcache.mat` sidecar caches the per-beam peak table so repeat
+  runs skip the recompute; it is invalidated on source size/mtime change
+  and never caches the tensor itself.
+
+### Frame assumption (important)
+
+The delivered `az`/`el` are **panel-frame, pre-mechanical-tilt**, the same
+convention `imt_aas_codebook_select` uses. The delivered metadata carries
+`array_electrical_tilt_deg = mechanical_downtilt_deg =
+subarray_downtilt_deg = 0`, i.e. no tilt of any kind is baked into the
+patterns.
+
+`imtAasCompositeGain` rotates the **steering direction** from the sector
+frame into the panel frame exactly as on the analytic path, then evaluates
+the delivered pattern there. The pattern itself is **not** rotated a second
+time. Treating these patterns as sector-frame would apply the mechanical
+downtilt twice.
+
+### As-delivered sub-array downtilt
+
+The delivered patterns report `subarray_downtilt_deg = 0`, whereas
+`aasGeometryPreset('r23_1x3_default')` defaults to
+`subarrayDowntiltDeg = 3`. The patterns are used **as delivered**: no
+elevation offset is synthesized to compensate, because that would inject an
+invented modeling assumption into vendor data.
+
+> For an apples-to-apples external-vs-ideal comparison, run the
+> `'ideal'` / `'codebook'` baseline with the `subarrayDowntiltDeg = 0`
+> override so both sides share the same assumption. The external beam set
+> uses **0 deg** sub-array downtilt, distinct from the `r23_1x3_default`
+> 3 deg default.
+
+### Preserved power convention
+
+This option changes only the **gain source**. The per-beam EIRP split
+convention is untouched: with `splitSectorPower` on, each beam still gets
+`P_beam = sectorEirp - 10*log10(N)`, and the peak-normalization invariant
+still holds regardless of where the gain came from.
+
+### Geometry cross-check
+
+The active `aasGeometryPreset` is cross-checked against the file's
+metadata automatically. A beam set synthesized for a different array
+raises `imtAasLoadExternalBeamset:geometryMismatch` rather than silently
+producing wrong numbers. For the delivered 8x8 file the mapping is:
+
+| File metadata | Value | `r23_1x3_default` |
+|---|---|---|
+| `physical_grid_horizontal_cols_per_pol` | 16 | `arrayCols` 16 |
+| `physical_grid_vertical_rows_per_pol` | 8 | `arrayRows` 8 |
+| `aas_subarray_rows` / `_cols` | 3 / 1 | `subarrayElementRows` 3 |
+| `num_physical_elements` | 768 | 768 |
+
+Note that `N1` / `N2` in the filename are the **logical port** grid, not
+the physical element grid — `N1=8, N2=8` with a 16x8 physical grid is
+consistent, not a mismatch.
+
+### Beam selection rule
+
+`opts.externalBeamSelectionMode`:
+
+* `'exhaustive'` (default) — evaluate every beam's gain at the requested
+  steering direction and take the argmax. This is the real-world PMI
+  feedback rule and mirrors the `'exhaustive'` validation mode of
+  `imt_aas_codebook_select`. Vectorized: the four bracketing grid indices
+  are resolved once and combined across the whole beam dimension in a
+  single pass.
+* `'nearestPeak'` — pick the beam whose recorded peak direction is nearest
+  the request. Cheaper, but ignores pattern shape.
+
+### Provenance
+
+`out.metadata` carries `beamSelection`, `externalBeamFile`,
+`externalBeamsetChecksum` (MD5), `numExternalBeams`, and a light
+`externalBeamset` descriptor. The beam tensor is **never** copied into
+`out.metadata` or `out.params` — for the delivered 8x8 file that would be a
+1.33 GB copy.
+
+The file's own frequency metadata is passed through verbatim, including any
+discrepancy: the delivered `7p4_*` files report
+`carrier_frequency_hz = 3.7e9`, which disagrees with the `7p4` (7.4 GHz)
+filename prefix. This is recorded in
+`out.metadata.externalBeamset.frequencyNote` and never silently reconciled.
+
 ## R23 single-sector EIRP CDF MVP (BS-input-driven)
 
 A minimal, R23-aligned MVP for generating per-(azimuth, elevation) EIRP

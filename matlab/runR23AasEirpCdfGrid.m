@@ -103,7 +103,45 @@ function out = runR23AasEirpCdfGrid(varargin)
 %                         inside imtAasArrayFactor.
 %       opts.codebookOversample: positive integer scalar or [O_H O_V]
 %           pair, default [4 4] (TS 38.214 Table 5.2.2.2.1-2 default).
-%       Surfaced in out.metadata.beamSelection / out.metadata.beamCodebook.
+%           'external' -> each beam is taken from an EXTERNAL delivered
+%                         PMI beam set (vendor / measured absolute
+%                         composite-gain patterns) instead of the analytic
+%                         element-pattern + array-factor model. Requires
+%                         opts.externalBeamFile.
+%           'internal' is accepted as an alias for 'ideal'.
+%       opts.externalBeamFile: path to the delivered beam-set MAT file.
+%           REQUIRED when beamSelection = 'external'; missing ->
+%           runR23AasEirpCdfGrid:missingExternalBeamFile. The file is
+%           loaded EXACTLY ONCE, before the Monte Carlo loop, via
+%           imtAasLoadExternalBeamset, and rides params.externalBeamset
+%           the same way params.beamCodebook does.
+%       opts.externalBeamSelectionMode ('exhaustive' default |
+%           'nearestPeak'): how a beam is picked for a steering
+%           direction. 'exhaustive' evaluates every beam's gain at the
+%           requested direction and takes the argmax (the real PMI
+%           feedback rule); delivered PMI index ordering is arbitrary and
+%           is never used for selection.
+%       opts.externalBeamsetOpts: struct forwarded to
+%           imtAasLoadExternalBeamset (geometry, validateEnvelope,
+%           computeChecksum, useCache, ...). The ACTIVE aasGeometryPreset
+%           is cross-checked automatically unless a geometry is supplied
+%           here; a beam set built for a different array raises
+%           imtAasLoadExternalBeamset:geometryMismatch.
+%       External beam-set frame: the delivered az/el are PANEL-FRAME,
+%           pre-mechanical-tilt (the delivered metadata carries zero
+%           electrical / mechanical / sub-array tilt). The STEERING
+%           direction is still rotated sector->panel exactly as on the
+%           analytic path; the pattern itself is NOT rotated again.
+%       As-delivered caveat: the delivered patterns report
+%           subarray_downtilt_deg = 0 while aasGeometryPreset
+%           ('r23_1x3_default') defaults to 3 deg. The patterns are used
+%           AS DELIVERED and no offset is synthesized. For an
+%           apples-to-apples external-vs-ideal comparison, run the
+%           ideal/codebook baseline with subarrayDowntiltDeg = 0.
+%       Surfaced in out.metadata.beamSelection / out.metadata.beamCodebook
+%       / out.metadata.externalBeamFile / .externalBeamsetChecksum /
+%       .numExternalBeams / .externalBeamset (light descriptor; the beam
+%       tensor is never copied into metadata or into out.params).
 %       See imt_aas_dft_codebook / imt_aas_codebook_select for the
 %       construction, the max-gain == nearest-bin property, and the
 %       aliasing (grating lobe) caveat for the d_V = 2.1 lambda stack.
@@ -605,6 +643,21 @@ function out = runR23AasEirpCdfGrid(varargin)
     %                           single-panel oversampled-DFT (PMI) beams
     [opts.beamSelection, params.beamCodebook] = resolveBeamCodebook(opts);
 
+    % ---- external beam set (non-breaking; only when beamSelection is
+    % 'external') -------------------------------------------------------
+    % Loaded EXACTLY ONCE here, before the Monte Carlo loop, and carried
+    % on params.externalBeamset so it rides the same params path as
+    % beamCodebook: imtAasSectorEirpGridFromBeams -> imtAasEirpGrid ->
+    % imtAasCompositeGain, where it replaces the analytic element pattern
+    % + array factor. The delivered files are ~689 MB / 1.33 GB resident
+    % and MAT v7 (no partial loading), so a per-draw load would be fatal.
+    externalBeamsetResolved = resolveExternalBeamset(opts, geom);
+    if externalBeamsetResolved.enable
+        % Attached ONLY when enabled, so the params struct on the
+        % 'ideal'/'codebook' paths keeps its exact historical field set.
+        params.externalBeamset = externalBeamsetResolved;
+    end
+
     % ---- resolve opts with defaults ----------------------------------
     if ~isfield(opts, 'maxEirpPerSector_dBm') || isempty(opts.maxEirpPerSector_dBm)
         opts.maxEirpPerSector_dBm = nestedParams.bs.maxEirpPerSector_dBm;
@@ -883,7 +936,7 @@ function out = runR23AasEirpCdfGrid(varargin)
     stats.numUesPerSector    = numBeams;
     stats.sectorEirpDbm      = params.sectorEirpDbm;
     stats.perBeamPeakEirpDbm = perBeamPeakEirpDbm;
-    stats.params             = params;
+    stats.params             = paramsForExport(params);
     stats.opts               = opts;
 
     % ---- init parallel gain accumulator (only when requested) -------
@@ -1456,6 +1509,36 @@ function out = runR23AasEirpCdfGrid(varargin)
     end
     metadata.beamSelection         = opts.beamSelection;
     metadata.beamCodebook          = params.beamCodebook;
+    % External beam-set provenance. Deliberately LIGHT: the beam tensor
+    % itself is never copied into metadata.
+    if isfield(params, 'externalBeamset') && ...
+            isstruct(params.externalBeamset) && ...
+            isfield(params.externalBeamset, 'enable') && ...
+            params.externalBeamset.enable
+        bsMeta = params.externalBeamset.beamset.meta;
+        metadata.externalBeamFile         = bsMeta.sourceFile;
+        metadata.externalBeamsetChecksum  = bsMeta.checksum;
+        metadata.numExternalBeams         = params.externalBeamset.beamset.numBeams;
+        metadata.externalBeamset = struct( ...
+            'sourceFile',       bsMeta.sourceFile, ...
+            'checksum',         bsMeta.checksum, ...
+            'bytes',            bsMeta.bytes, ...
+            'type',             params.externalBeamset.beamset.type, ...
+            'numBeams',         params.externalBeamset.beamset.numBeams, ...
+            'selectionMode',    params.externalBeamset.mode, ...
+            'gainFloorDbi',     params.externalBeamset.beamset.gainFloorDbi, ...
+            'frequencyHz',      bsMeta.frequencyHz, ...
+            'frequencyLabel',   bsMeta.frequencyLabel, ...
+            'frequencyNote',    bsMeta.frequencyNote, ...
+            'loadSeconds',      bsMeta.loadSeconds, ...
+            'notes',            bsMeta.notes, ...
+            'metadataRaw',      bsMeta.metadataRaw);
+    else
+        metadata.externalBeamFile        = '';
+        metadata.externalBeamsetChecksum = '';
+        metadata.numExternalBeams        = 0;
+        metadata.externalBeamset         = [];
+    end
     metadata.computePointingHeatmap = computePointing;
     metadata.computePointingHistogram = logical(opts.computePointingHistogram);
     metadata.pointingHistogramAzBinsDeg = opts.pointingAzBinEdgesDeg;
@@ -1535,7 +1618,7 @@ function out = runR23AasEirpCdfGrid(varargin)
 
     % ---- assemble output --------------------------------------------
     out = struct();
-    out.params         = params;
+    out.params         = paramsForExport(params);
     out.nestedParams   = nestedParams;
     out.sector         = sector;
     out.opts           = opts;
@@ -2449,12 +2532,18 @@ function [mode, cb] = resolveBeamCodebook(opts)
     end
     mode = lower(mode);
     switch mode
-        case {'ideal', 'codebook'}
+        case {'ideal', 'codebook', 'external'}
             % ok
+        case 'internal'
+            % Accepted alias for the historical continuous-steering path.
+            % Normalized to 'ideal' so out.metadata.beamSelection keeps
+            % reporting the established string (existing regression pin).
+            mode = 'ideal';
         otherwise
             error('runR23AasEirpCdfGrid:invalidBeamSelection', ...
-                ['opts.beamSelection must be ''ideal'' or ''codebook'' ', ...
-                 '(got ''%s'').'], mode);
+                ['opts.beamSelection must be ''ideal'', ''codebook'' or ', ...
+                 '''external'' (''internal'' is accepted as an alias for ', ...
+                 '''ideal''); got ''%s''.'], mode);
     end
 
     os = [4 4];
@@ -2474,13 +2563,92 @@ function [mode, cb] = resolveBeamCodebook(opts)
         os = [os, os];
     end
 
-    if strcmp(mode, 'ideal')
-        cb = struct('enable', false);
-    else
+    if strcmp(mode, 'codebook')
         cb = struct('enable', true, ...
                     'oversampleH', os(1), ...
                     'oversampleV', os(2));
+    else
+        % 'ideal' and 'external' both leave the DFT codebook hook off.
+        % For 'external' the analytic array factor is not evaluated at
+        % all, so snapping its steering would be meaningless.
+        cb = struct('enable', false);
     end
+end
+
+function p = paramsForExport(p)
+%PARAMSFOREXPORT Strip the external beam tensor out of an exported params.
+%   params.externalBeamset.beamset carries the full [nAz x nEl x numBeams]
+%   gain tensor -- 1.33 GB for the delivered 8x8 file. Copying that into
+%   out.params / out.stats.params would make the returned struct (and any
+%   save() of it) enormous, so exported copies keep only a light
+%   descriptor. The in-flight params used during the run are untouched.
+%   No-op when the field is absent, so the default paths are unchanged.
+    if ~isfield(p, 'externalBeamset') || ~isstruct(p.externalBeamset) || ...
+            ~isfield(p.externalBeamset, 'enable') || ~p.externalBeamset.enable
+        return;
+    end
+    bs = p.externalBeamset.beamset;
+    p.externalBeamset = struct( ...
+        'enable',       true, ...
+        'mode',         p.externalBeamset.mode, ...
+        'type',         bs.type, ...
+        'numBeams',     bs.numBeams, ...
+        'gainFloorDbi', bs.gainFloorDbi, ...
+        'sourceFile',   bs.meta.sourceFile, ...
+        'checksum',     bs.meta.checksum, ...
+        'tensorOmitted', true);
+end
+
+function ext = resolveExternalBeamset(opts, geom)
+%RESOLVEEXTERNALBEAMSET Load the external beam set for beamSelection='external'.
+%   Returns struct('enable', false) for every other beamSelection, which
+%   leaves imtAasCompositeGain on its historical analytic path and keeps
+%   the default output byte-identical.
+%
+%   Requires opts.externalBeamFile when beamSelection is 'external'.
+%   Errors:
+%       runR23AasEirpCdfGrid:missingExternalBeamFile
+%       runR23AasEirpCdfGrid:invalidExternalBeamFile
+%   Loader failures (missing file, unknown layout, NaN/Inf, geometry
+%   mismatch) propagate with their own imtAasLoadExternalBeamset:* ids.
+    ext = struct('enable', false);
+    if ~isstruct(opts) || ~isfield(opts, 'beamSelection') || ...
+            isempty(opts.beamSelection) || ...
+            ~strcmp(char(string(opts.beamSelection)), 'external')
+        return;
+    end
+
+    if ~isfield(opts, 'externalBeamFile') || isempty(opts.externalBeamFile)
+        error('runR23AasEirpCdfGrid:missingExternalBeamFile', ...
+            ['opts.beamSelection = ''external'' requires ', ...
+             'opts.externalBeamFile (path to the delivered PMI beam-set ', ...
+             'MAT file).']);
+    end
+    f = opts.externalBeamFile;
+    if ~(ischar(f) || (isstring(f) && isscalar(f)))
+        error('runR23AasEirpCdfGrid:invalidExternalBeamFile', ...
+            'opts.externalBeamFile must be a char vector or scalar string.');
+    end
+
+    loaderOpts = struct();
+    if isfield(opts, 'externalBeamsetOpts') && ~isempty(opts.externalBeamsetOpts)
+        loaderOpts = opts.externalBeamsetOpts;
+    end
+    % Cross-check the beam set against the ACTIVE geometry preset unless
+    % the caller has supplied its own geometry. A beam set synthesized for a
+    % different array is a silent modeling error otherwise.
+    if ~isfield(loaderOpts, 'geometry') || isempty(loaderOpts.geometry)
+        loaderOpts.geometry = geom;
+    end
+    beamset = imtAasLoadExternalBeamset(char(f), loaderOpts);
+
+    mode = 'exhaustive';
+    if isfield(opts, 'externalBeamSelectionMode') && ...
+            ~isempty(opts.externalBeamSelectionMode)
+        mode = char(string(opts.externalBeamSelectionMode));
+    end
+
+    ext = struct('enable', true, 'beamset', beamset, 'mode', mode);
 end
 
 function ssb = resolveSsbOpts(raw)
