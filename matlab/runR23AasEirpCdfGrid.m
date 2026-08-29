@@ -157,18 +157,35 @@ function out = runR23AasEirpCdfGrid(varargin)
 %       continuously for whatever direction each draw asks for, so they can
 %       never "miss" a beam. 'external' can only ever use entries of a
 %       FINITE delivered codebook, and a low-numMc run touches only a
-%       fraction of them. With the delivered 256-entry 7 GHz set, numMc = 8
-%       with 3 UEs formed just 19 of 256 beams; numMc = 50 reached 59.
-%       Peak and upper-tail percentiles from a low-coverage run therefore
-%       UNDERSTATE what the delivered codebook can achieve, because the
-%       high-gain entries were simply never selected.
+%       fraction of them. Measured on the delivered 256-entry 7 GHz set
+%       (3 UEs, seeds 3/17/101), unique beams selected:
+%           numMc     8 -> 19/21/20      numMc   400 -> 99/98/94
+%           numMc    25 -> 42/42/43      numMc   800 -> 102/101/100
+%           numMc    50 -> 59/61/56      numMc  1600 -> 102/101/101
+%           numMc   100 -> 75/76/75      numMc  3200 -> 102/102/101
+%           numMc   200 -> 86/87/89      numMc  6400 -> 102/102/101
+%       Coverage depends on the STEERING directions only, not on the output
+%       grid: the selected-beam set is identical at el steps of 0.2, 2 and
+%       5 deg.
 %
-%       Rule of thumb: treat coverage well under 100% of numBeams as "not
-%       converged". There is no universal threshold -- coverage depends on
-%       the seed, the UE count and the steering-angle distribution -- so the
-%       check is that coverage PLATEAUS across increasing numMc, not that it
-%       exceeds a fixed number. Do not trust an external-vs-ideal or
-%       external-vs-codebook comparison until it has.
+%       Rule of thumb: the check is that coverage PLATEAUS -- compare
+%       uniqueBeamsSelected at numMc and 2*numMc and require it to stop
+%       moving. Do NOT read "coverage well under 100% of numBeams" as "not
+%       converged": on this delivered set coverage saturates near 102 of
+%       256 (~40%) and 100% is unreachable, because the ceiling is set by
+%       the deployment's steering distribution, not by the codebook. Swept
+%       over the FULL delivered pattern domain all 256 entries are
+%       selectable somewhere; restricted to the steering directions this
+%       scenario actually produces (az +/-59.9 deg, el -6.96..+3.64 deg)
+%       only 128 remain selectable, and 102 are ever selected.
+%
+%       The unexercised entries do not understate the envelope PEAK -- the
+%       best peak gain among never-selected beams is 31.4980 dBi, 0.6983 dB
+%       below the file maximum -- but upper-tail percentiles from a run that
+%       has NOT yet plateaued are still understated. RECOMMENDED MINIMUM for
+%       any external run quoted as an envelope: numMc >= 800, the point at
+%       which all seeds reach the plateau. See the README section
+%       "Recommended minimum numMc for external-beam runs".
 %
 %   Worked example -- where the reported peak shortfall actually comes from.
 %   Against the delivered 7 GHz file (direct-path reference
@@ -185,8 +202,16 @@ function out = runR23AasEirpCdfGrid(varargin)
 %   peaks of the beams that WERE selected; it has nothing to do with
 %   sampling el = -0.8 deg (the peak elevation of the delivered file's own
 %   best beams). Adding el = -0.8 to the grid produces a BIT-IDENTICAL
-%   result, because beams 120/121/136/137 -- the four that tie for the
-%   32.1963 dBi peak -- are not selected at all at numMc = 8.
+%   result, because the peak-owning entries are not selected at all at
+%   numMc = 8, seed 3.
+%       The peak is owned by a CLUSTER of four mirror-related entries, not
+%   one beam: 121 and 136 tie exactly at 32.196274 dBi (az -/+2.0,
+%   el -/+0.8), and 120/137 sit 8e-6 dB lower. Only these four are within
+%   0.5 dB of the maximum, so the coverage term collapses as soon as ANY
+%   one of them is selected. This is seed-dependent: at seed 101 beam 136
+%   is already selected at numMc = 8 (gap 0.0013 dB on the 0.2 deg grid).
+%   Treat the decomposition above as a SEED-3 WORKED EXAMPLE, not as a
+%   fixed property of the file.
 %       See imt_aas_dft_codebook / imt_aas_codebook_select for the
 %       construction, the max-gain == nearest-bin property, and the
 %       aliasing (grating lobe) caveat for the d_V = 2.1 lambda stack.
