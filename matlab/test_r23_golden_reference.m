@@ -21,6 +21,10 @@ function results = test_r23_golden_reference()
 %     G9. the panel-frame and CTIA goldens are each DISTINCT from the
 %         urban baseline golden (proves the outputFrame / aasGeometryPreset
 %         run-options actually took effect rather than being ignored).
+%     G10. verifyR23GoldenReference passes against the tracked 2.7 GHz
+%          golden ("band2p7-urban-small-grid-v1"), whose manifest records
+%          the itu_2p7ghz_4x8 preset, a max EIRP <= 85 dBm, and a value
+%          distinct from the 7 GHz urban baseline.
 %
 %   Antenna-face EIRP only -- no new modeling capability is exercised.
 
@@ -36,6 +40,7 @@ function results = test_r23_golden_reference()
     results = g7_panelframe_verifier_passes(results);
     results = g8_ctia_1x6_verifier_passes(results);
     results = g9_anchors_are_distinct(results);
+    results = g10_band2p7_verifier_passes(results);
 
     fprintf('\n--- test_r23_golden_reference summary ---\n');
     for k = 1:numel(results.summary)
@@ -215,6 +220,28 @@ function r = g9_anchors_are_distinct(r)
                    'panelDistinct=%d, ctiaDistinct=%d)'], ...
                    urbanMax, panelMax, ctiaMax, ...
                    double(panelDistinct), double(ctiaDistinct));
+    r = recordResult(r, ok, msg);
+end
+
+function r = g10_band2p7_verifier_passes(r)
+    s = warning('off', 'runR23AasEirpCdfGrid:powerSelfCheckWarn');
+    cleanup = onCleanup(@() warning(s)); %#ok<NASGU>
+    res = verifyR23GoldenReference('band2p7-urban-small-grid-v1');
+    bandMax  = goldenManifestMaxEirp('band2p7_urban_small_grid_v1');
+    urbanMax = goldenManifestMaxEirp('r23_urban_baseline_small_grid_v1');
+    mdPath = fullfile(goldenDirFor('band2p7_urban_small_grid_v1'), 'metadata.json');
+    mdText = '';
+    if exist(mdPath, 'file') == 2
+        mdText = fileread(mdPath);
+    end
+    okPreset = contains(mdText, 'itu_2p7ghz_4x8');
+    ok = logical(res.passed) && ~isnan(bandMax) && bandMax <= 85 + 1e-6 && ...
+         ~isnan(urbanMax) && abs(bandMax - urbanMax) > 1e-6 && okPreset;
+    msg = sprintf(['G10: verifier passes against tracked 2.7 GHz golden ' ...
+                   '(passed=%d, %d compared fields, max=%.6g dBm, ' ...
+                   'preset itu_2p7ghz_4x8=%d)'], ...
+                   double(res.passed), numel(res.differences), bandMax, ...
+                   double(okPreset));
     r = recordResult(r, ok, msg);
 end
 

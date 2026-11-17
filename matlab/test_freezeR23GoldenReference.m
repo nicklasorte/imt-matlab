@@ -116,7 +116,8 @@ function r = f3_freeze_verify_roundtrip(r)
     cleanup = onCleanup(@() warning(s)); %#ok<NASGU>
     names = {'r23-urban-baseline-small-grid-v1', ...
              'r23-urban-panelframe-small-grid-v1', ...
-             'r23-ctia-1x6-small-grid-v1'};
+             'r23-ctia-1x6-small-grid-v1', ...
+             'band2p7-urban-small-grid-v1'};
     allOk = true;
     fails = {};
     for k = 1:numel(names)
