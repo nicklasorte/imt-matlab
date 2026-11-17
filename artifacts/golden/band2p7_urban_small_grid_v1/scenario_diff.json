@@ -1,0 +1,23 @@
+{
+  "hasScenarioPreset": true,
+  "scenarioPreset": "2p7ghz-urban",
+  "scenarioCategory": "band-2p7ghz",
+  "sourceReference": "2.7 GHz macro urban: ITU-R 5D/716 Annex 4.4 1 710-4 990 MHz AAS table (4x8 sub-array), 47 CFR Part 27 power (65 dBm/MHz = 85 dBm / 100 MHz), ITU 2-3 GHz BS height / cell radius",
+  "reproducible": true,
+  "presetOverrides": {},
+  "referenceOnly": {
+    "notes": "reference-only metadata; NOT active in current antenna-face EIRP-grid run",
+    "networkLoadingFactor": 0.2,
+    "bsTddActivityFactor": 0.75
+  },
+  "coreScenarioFields": {
+    "environment": "urban",
+    "cellRadius_m": 400,
+    "bsHeight_m": 20,
+    "numUesPerSector": 3,
+    "maxEirpPerSector_dBm": 85,
+    "splitSectorPower": true,
+    "frequencyMHz": 2750,
+    "bandwidthMHz": 100
+  }
+}

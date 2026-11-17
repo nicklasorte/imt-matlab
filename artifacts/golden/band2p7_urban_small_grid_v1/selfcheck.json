@@ -1,0 +1,13 @@
+{
+  "powerSemantics": {
+    "expectedSectorPeakEirp_dBm": 85,
+    "expectedPerBeamPeakEirp_dBm": 80.228787452803374,
+    "observedMaxGridEirp_dBm": 84.096567501910258,
+    "peakShortfall_dB": -3.8677800491068837,
+    "tolerance_dB": 1E-6,
+    "warnShortfallThreshold_dB": 3,
+    "splitSectorPower": true,
+    "status": "pass",
+    "message": "power self-check pass: observedMaxGridEirp_dBm=84.0966, expectedPerBeamPeakEirp_dBm=80.2288, expectedSectorPeakEirp_dBm=85.0000."
+  }
+}
