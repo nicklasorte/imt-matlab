@@ -646,6 +646,36 @@ gain, no I / N, no CDF / CCDF, no coordination-distance logic, no TDD
 activity factor, no network loading factor, no multi-site / 19-site
 cluster, no FS / FSS receiver geometry, and no IMT / UE scheduling.
 
+## 2.7 GHz band option (`opts.band = '2p7ghz'`)
+
+`runR23AasEirpCdfGrid` accepts an optional band selector. When no band is
+given, every output is byte-identical to the R23 7.125-8.4 GHz path.
+
+```matlab
+opts = struct('band', '2p7ghz', 'environment', 'urban', 'numMc', 1000);
+result = runR23AasEirpCdfGrid(opts);
+
+% or nested params / named scenarios
+result = runR23AasEirpCdfGrid(imtBandDefaultParams('2p7ghz', 'suburban'));
+result = runR23AasEirpCdfGrid(r23ScenarioPreset('2p7ghz-urban'));
+```
+
+| Item | 2.7 GHz value | Source |
+| --- | --- | --- |
+| Band | 2700-2800 MHz, TDD, centre 2750 MHz, 100 MHz channel | Study assumption |
+| Antenna | 4 x 8 sub-arrays, 3 elements each, 0.5 / 2.1 / 0.7 lambda, 3 deg sub-array tilt, 6 deg mechanical tilt, 6.4 dBi element; 26.22 dBi peak gain (`aasGeometryPreset('itu_2p7ghz_4x8')`) | ITU-R 5D/716 Annex 4.4, 1 710-4 990 MHz AAS table |
+| Power | 65 dBm/MHz EIRP = 85 dBm / 100 MHz sector peak; conducted 58.78 dBm | 47 CFR Part 27 (both environments) |
+| BS height / cell radius | Urban 20 m / 400 m; suburban 25 m / 800 m | ITU-R 5D/716 Annex 4.4, 2-3 GHz deployment table |
+| Other deployment, TDD activity, loading | Inherited from `r23DefaultParams` | Unchanged |
+
+The Part 27 power departs from the ITU table value (72.28 dBm) by design.
+Run with `sectorEirpDbm = 72.28` and `conductedPowerDbm = 46.06` for the
+ITU-power comparison. With `opts.subband` on, the per-subband peak equals
+65 dBm/MHz, the Part 27 limit. Frequency is metadata only: the antenna math
+works in wavelengths, so no antenna-math file changed. See
+`docs/PLAN_2p7GHz_band_option.md` and
+`test_runR23AasEirpCdfGrid_band2p7`.
+
 ## R23 7/8 GHz Extended AAS EIRP CDF-grid MVP
 
 `runR23AasEirpCdfGrid(opts)` is the **source-aligned MVP** for the

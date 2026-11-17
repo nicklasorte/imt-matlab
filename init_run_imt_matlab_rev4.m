@@ -440,6 +440,71 @@ opts.gainBinEdgesDbi=[-60:0.1:40];     % finer than default -100:0.5:40
 
 
 
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%2.7 GHz band option (11-17-2026)
+%%%%%%%%%ITU 1710-4990 MHz 4x8 AAS (26.22 dBi), Part 27 65 dBm/MHz = 85 dBm/100 MHz,
+%%%%%%%%%2750 MHz TDD, ITU 2-3 GHz BS height/cell radius (urban 20 m/400 m, suburban 25 m/800 m)
+% % %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% rev_num=34 %%%%%%2.7 GHz urban baseline, EIRP + gain + pointing histogram
+% opts=struct();
+% opts.band='2p7ghz';
+% opts.environment='urban';
+% opts.numMc=2000;
+% opts.seed=rev_num;
+% opts.azGridDeg=-180:2:180;
+% opts.elGridDeg=-90:1:90;
+% opts.binEdgesDbm=[-100:0.1:120];
+% opts.percentiles=unique(sort(horzcat([1:1:99],[0.1:0.1:1],[99:0.1:99.9],0.01, 99.99)));
+% opts.outputFrame='panel';
+% opts.computePointingHistogram=true;
+% opts.outputDomain='both';
+% opts.gainBinEdgesDbi=[-60:0.1:40];
+% % %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% rev_num=35 %%%%%%2.7 GHz suburban (25 m, 800 m)
+% opts=struct();
+% opts.band='2p7ghz';
+% opts.environment='suburban';
+% opts.numMc=2000;
+% opts.seed=rev_num;
+% opts.azGridDeg=-180:2:180;
+% opts.elGridDeg=-90:1:90;
+% opts.binEdgesDbm=[-100:0.1:120];
+% opts.percentiles=unique(sort(horzcat([1:1:99],[0.1:0.1:1],[99:0.1:99.9],0.01, 99.99)));
+% opts.outputFrame='panel';
+% opts.computePointingHistogram=true;
+% opts.outputDomain='both';
+% opts.gainBinEdgesDbi=[-60:0.1:40];
+% % %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% rev_num=36 %%%%%%2.7 GHz urban + narrowband density (Part 27 check: peak = 65 dBm/MHz)
+% opts=struct();
+% opts.band='2p7ghz';
+% opts.environment='urban';
+% opts.numMc=2000;
+% opts.seed=rev_num;
+% opts.azGridDeg=-180:2:180;
+% opts.elGridDeg=-90:1:90;
+% opts.binEdgesDbm=[-100:0.1:120];
+% opts.percentiles=unique(sort(horzcat([1:1:99],[0.1:0.1:1],[99:0.1:99.9],0.01, 99.99)));
+% opts.outputFrame='panel';
+% opts.subband=struct('subbandMHz',1);   %%%%see result.subband
+% % %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% rev_num=37 %%%%%%2.7 GHz urban at the ITU table power (72.28 dBm) for comparison
+% opts=struct();
+% opts.band='2p7ghz';
+% opts.environment='urban';
+% opts.numMc=2000;
+% opts.seed=rev_num;
+% opts.azGridDeg=-180:2:180;
+% opts.elGridDeg=-90:1:90;
+% opts.binEdgesDbm=[-100:0.1:120];
+% opts.percentiles=unique(sort(horzcat([1:1:99],[0.1:0.1:1],[99:0.1:99.9],0.01, 99.99)));
+% opts.outputFrame='panel';
+% opts.sectorEirpDbm=72.28;
+% opts.conductedPowerDbm=72.28-26.2227;
+% opts.maxEirpPerSector_dBm=72.28;
+% % %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+
 %%%%%%%%%%%%%%%%%%%THESE HAVE NOT RUN YET
 
 % % %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%

@@ -398,6 +398,29 @@ This is distinct from the `opts.ssb` broadcast duty-cycle model, the
 `opts.prbWeighting` bandwidth weighting, and the `opts.beamSelection`
 codebook path.
 
+## Band option (`opts.band`) — 2.7 GHz parameter set, no new antenna math
+
+`runR23AasEirpCdfGrid` accepts `opts.band` (`'7ghz'` default, `'2p7ghz'`).
+`imtBandName` canonicalizes aliases; `imtBandDefaultParams(band, env)`
+returns the nested params (`'7ghz'` is `isequal` to `r23DefaultParams`);
+the band picks the default geometry preset (`'2p7ghz'` ->
+`itu_2p7ghz_4x8`). An explicit `aasGeometryPreset` still wins and sets
+`metadata.bandPresetMismatch`.
+
+- **Byte-identical when absent.** No band anywhere -> historical
+  `r23DefaultParams` / `r23_1x3_default` path, and no band metadata fields
+  are added (`test_runR23AasEirpCdfGrid_band2p7` T1 checks band absent ==
+  `'7ghz'`).
+- **2.7 GHz sources.** Antenna: ITU-R 5D/716 Annex 4.4 1 710-4 990 MHz AAS
+  table (4x8, 26.22 dBi). Power: 47 CFR Part 27, 65 dBm/MHz in both
+  environments = 85 dBm / 100 MHz (NOT the ITU 72.28 dBm). Deployment:
+  only BS height and cell radius from the ITU 2-3 GHz table (urban 20 m /
+  400 m, suburban 25 m / 800 m); everything else inherited. 2750 MHz,
+  100 MHz, TDD.
+- **Part 27 check.** `opts.subband` headline peak == 65 dBm/MHz.
+- Only `runR23AasEirpCdfGrid` (camelCase family) is band-aware. The
+  snake_case Monte Carlo and single-sector MVP families stay 7 GHz.
+
 ## Angle conventions (matched to pycraf and M.2101)
 
 - External `azim ∈ [-180°, 180°]`, `elev ∈ [-90°, 90°]`
