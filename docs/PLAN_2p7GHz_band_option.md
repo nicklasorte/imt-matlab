@@ -3,11 +3,11 @@
 **Status:** DRAFT // PRE-DECISIONAL. Plan only. No code has changed and no
 MATLAB tests have run for this plan.
 
-**Date:** 2026-11-17
+**Date:** 2026-11-17 (rev 2: decisions D1-D4 settled)
 
 **Goal:** Let `runR23AasEirpCdfGrid` and `init_run_imt_matlab_rev4.m` produce
-the base-station EIRP distribution for a 2.7 GHz IMT deployment, without
-changing any 7 GHz result.
+the base-station EIRP distribution for a 2.7 GHz IMT deployment in
+2700-2800 MHz, without changing any 7 GHz result.
 
 ## Summary
 
@@ -15,29 +15,47 @@ changing any 7 GHz result.
   metadata only (`frequencyMHz` is stamped but never enters a pattern
   calculation). A 2.7 GHz option is therefore a **parameter-set change**,
   not new antenna math, and the pycraf strict gate isn't affected.
-- What changes the result is the array size (4 x 8 sub-arrays, not 8 x 16),
-  the conducted power, the deployment geometry (BS height and cell radius
-  drive the beam-pointing distribution), and the channel bandwidth used for
-  density outputs.
-- The proposed baseline is the ITU-R WP 5D AAS table for 1 710-4 990 MHz:
-  **72.28 dBm sector EIRP, 26.22 dBi peak gain**. That is about 6 dB less
-  gain and 6 dB less EIRP than the 7 GHz baseline, with beams about twice as
-  wide.
-- Four decisions need your input before coding starts. See
-  [Decisions needed](#decisions-needed).
+- **Antenna:** the ITU-R WP 5D AAS table for 1 710-4 990 MHz: a 4 x 8
+  sub-array panel with **26.22 dBi** peak gain.
+- **Power:** the FCC Part 27 base-station limit of **65 dBm/MHz EIRP**, which
+  is **85.0 dBm per 100 MHz** sector peak. That is 12.7 dB above the ITU
+  table's 72.28 dBm. The extra power goes into conducted power; the antenna
+  geometry stays the ITU geometry.
+- **Band:** TDD, 2700-2800 MHz, center frequency 2 750 MHz, 100 MHz channel.
+- **Deployment:** no new deployment parameters. The run inherits the
+  existing defaults. See [Deployment](#deployment).
 
-## Source parameters
+## Decisions (settled 2026-11-17)
 
-### Antenna table (proposed baseline)
+| ID | Decision | Setting |
+| --- | --- | --- |
+| D1 | Antenna source | ITU-R WP 5D 1 710-4 990 MHz AAS table. |
+| D2 | Deployment geometry | No 2.7 GHz deployment table. Inherit the existing defaults. |
+| D3 | Power and bandwidth | Part 27 limit, 65 dBm/MHz EIRP, over a 100 MHz channel (2700-2800 MHz). |
+| D4 | Duplex and frequency | TDD; `frequencyMHz = 2750`. |
 
-Source: ITU-R WP 5D, *Characteristics of terrestrial component of IMT for
-sharing and compatibility studies in preparation for WRC-23* (Document
-5D/716, Annex 4.4), table "Beamforming antenna characteristics for IMT in
-1 710-4 990 MHz." The values below were read from a public WP 5D working
-document that reproduces the table (5D/TEMP/628(Rev.2), Table 5). Confirm
-them against your copy of 5D/716 Annex 4.4 before the preset is frozen.
+### Interpretation to confirm
 
-| Row | Parameter | 2.7 GHz (1 710-4 990 MHz table) | 7 GHz (current `r23_1x3_default`) |
+"65 dBm max" is read as **65 dBm/MHz EIRP**. Part 27 base-station limits
+for the comparable bands are set per megahertz: 1640 W/MHz (62.15 dBm/MHz)
+in general and 3280 W/MHz (65.16 dBm/MHz) in counties with 100 or fewer
+persons per square mile. 65 dBm/MHz is the rounded 3280 W/MHz value.
+
+If you meant 65 dBm total sector EIRP over 100 MHz, that is 20 dB lower
+(about 45 dBm/MHz). Only the two power values in the preset change; the
+rest of this plan stands.
+
+## Parameters
+
+### Antenna (ITU table)
+
+Source: ITU-R WP 5D, Document 5D/716, Annex 4.4, table "Beamforming antenna
+characteristics for IMT in 1 710-4 990 MHz." The values were read from a
+public WP 5D working document that reproduces the table (5D/TEMP/628(Rev.2),
+Table 5). Confirm them against your copy of 5D/716 Annex 4.4 before the
+preset is frozen.
+
+| Row | Parameter | 2.7 GHz preset | 7 GHz (`r23_1x3_default`) |
 | --- | --- | --- | --- |
 | 1.2 | Element gain | 6.4 dBi | 6.4 dBi |
 | 1.3 | Element H/V 3 dB beamwidth | 90 / 65 degrees | 90 / 65 degrees |
@@ -48,23 +66,33 @@ them against your copy of 5D/716 Annex 4.4 before the preset is frozen.
 | 1.7a | Element rows per sub-array | 3 | 3 |
 | 1.7b | Element spacing in sub-array | 0.7 lambda | 0.7 lambda |
 | 1.7c | Sub-array downtilt | 3 degrees | 3 degrees |
-| 1.8 | Array ohmic loss | 2 dB | 2 dB |
-| 1.9 | Conducted power per sub-array | **28 dBm** | 22 dBm |
+| 1.8 | Array ohmic loss | 2 dB (absorbed in element gain) | 2 dB |
 | 1.10 | Horizontal coverage | +/-60 degrees | +/-60 degrees |
 | 1.11 | Vertical coverage | 90-100 degrees | 90-100 degrees |
 | 1.12 | Mechanical downtilt | 6 degrees | 6 degrees |
-| 1.13 | Maximum sector EIRP | **72.28 dBm** | 78.3 dBm |
 
-### Derived values (checked by arithmetic for this plan)
+### Power (Part 27)
 
-The repo's power convention reproduces the ITU number:
+| Quantity | 2.7 GHz preset | ITU table value (reference only) | 7 GHz |
+| --- | --- | --- | --- |
+| Peak EIRP density | **65.0 dBm/MHz** | 52.28 dBm/MHz | 58.3 dBm/MHz |
+| Sector peak EIRP per 100 MHz | **85.0 dBm** | 72.28 dBm | 78.3 dBm |
+| Peak gain | 26.22 dBi | 26.22 dBi | 32.2 dBi |
+| Conducted power per 100 MHz | **58.78 dBm** | 46.06 dBm | 46.1 dBm |
+| Conducted power per sub-array | 40.72 dBm | 28 dBm | 22 dBm |
 
-- Peak gain = 6.4 + 10·log10(3) + 10·log10(4·8) = **26.22 dBi**
-- Conducted power = 28 + 10·log10(32) + 10·log10(2) = **46.06 dBm**
-- Sector EIRP = 46.06 + 26.22 = **72.28 dBm** (matches row 1.13)
+Derivation (run for this plan):
 
-The same formula gives 32.24 dBi and 78.33 dBm for the 8 x 16 case, which
-matches the existing 7 GHz preset.
+- Peak gain = 6.4 + 10·log10(3) + 10·log10(4·8) = 26.22 dBi
+- Sector EIRP = 65 + 10·log10(100) = 85.0 dBm per 100 MHz
+- Conducted power = 85.0 - 26.22 = 58.78 dBm, or 40.72 dBm per sub-array
+  across 32 sub-arrays and 2 polarizations
+
+This follows the same override pattern as `rev_num = 33`, which raised the
+7 GHz case to 90.8 dBm through `sectorEirpDbm`, `conductedPowerDbm`, and
+`maxEirpPerSector_dBm`.
+
+### Derived beam values
 
 | Quantity | 2.7 GHz | 7 GHz |
 | --- | --- | --- |
@@ -74,24 +102,30 @@ matches the existing 7 GHz preset.
 | Vertical grating-lobe offset (2.1 lambda) | About 28 degrees | About 28 degrees |
 | Panel size at 2 750 MHz | About 0.92 m x 0.44 m | Not applicable |
 
-### Deployment table (not yet confirmed)
+### Band and duplex
 
-The 2.7 GHz deployment values come from the 1-3 GHz deployment table in
-5D/716 Annex 4.4, which this plan could not read from a public copy. The
-3-6 GHz table in the same working document lists, for AAS macro: cell radius
-0.4 km urban and 0.8 km suburban, BS density 10 and 2.4 per km^2, antenna
-height 20 m and 25 m, below-rooftop 50% and 0%, 3 UEs per sector, TDD
-activity 75%, and network loading 20% or 50%. Treat these as placeholders
-until decision D2 is settled.
+| Parameter | Value |
+| --- | --- |
+| `bs.frequency_MHz` | 2750 |
+| `bs.channelBandwidth_MHz` | 100 (2700-2800 MHz) |
+| Duplex | TDD |
+| `bs.tddActivityFactor` | 0.75 (unchanged) |
+| `bs.networkLoadingFactor` | 0.20 (unchanged) |
 
-## Decisions needed
+Because the channel is 100 MHz, the existing "per 100 MHz" field names stay
+correct at 2.7 GHz.
 
-| ID | Decision | Options | Why it matters |
-| --- | --- | --- | --- |
-| D1 | Antenna and power source | (a) ITU 1 710-4 990 MHz table above. (b) A Cellular LOE or industry-supplied set. (c) Both, with (a) as baseline and (b) as a labeled sensitivity preset, like `ctia_7ghz_1x6`. | Sets peak gain and sector EIRP. Recommend (c) if an LOE set exists, else (a). |
-| D2 | Deployment geometry | BS height, cell radius, density, and below-rooftop share for urban and suburban, from the ITU 1-3 GHz table or the Cellular LOE. | BS height and cell radius set the UE elevation angles, which shape the EIRP CDF near the horizon. |
-| D3 | Channel bandwidth and EIRP reference | The ITU value is per channel. Pick the bandwidth (for example 20, 40, or 100 MHz) that 72.28 dBm applies to. | Every dBm/MHz output depends on it. The 7 GHz code labels EIRP "per 100 MHz" in several field names. |
-| D4 | Duplex and center frequency | TDD or FDD, and the stamped center frequency (for example 2 750 MHz). | TDD activity factor, SSB burst size, and metadata. Frequency doesn't change the pattern. |
+## Deployment
+
+No 2.7 GHz deployment table is added. The runner still needs a BS height,
+cell radius, and minimum UE distance to sample UE directions, so the band
+option inherits the existing `r23DefaultParams(environment)` deployment
+block unchanged (urban: 18 m, 400 m; suburban: 20 m, 800 m). Metadata
+records this as `deploymentSource = 'inherited (no 2.7 GHz deployment)'`.
+
+These values set the UE elevation angles, which shape the EIRP CDF near the
+horizon. A later deployment table can be added as an override without
+changing the band option.
 
 ## Design
 
@@ -113,82 +147,83 @@ until decision D2 is settled.
 ```matlab
 opts = struct();
 opts.band        = '2p7ghz';      % new; default '7ghz' when absent
-opts.environment = 'urban';       % or 'suburban'
 opts.numMc       = 1000;
 result = runR23AasEirpCdfGrid(opts);
 ```
 
-`opts.band = '2p7ghz'` does two things: it selects the 2.7 GHz nested
-parameters, and it makes the 4 x 8 geometry preset the default. An explicit
-`opts.aasGeometryPreset` still wins, so sensitivity cases stay possible. A
-band and preset from different bands is allowed but stamped in
+`opts.band = '2p7ghz'` selects the 2.7 GHz nested parameters and makes the
+`itu_2p7ghz_4x8` geometry preset the default. An explicit
+`opts.aasGeometryPreset` or `opts.sectorEirpDbm` still wins, so sensitivity
+runs (for example the ITU 72.28 dBm power) stay possible. A band and preset
+from different bands is allowed but stamped in
 `result.metadata.bandPresetMismatch`.
 
 ### New files
 
 | File | Purpose |
 | --- | --- |
-| `matlab/imtBandDefaultParams.m` | `params = imtBandDefaultParams(band, environment)`. For `'7ghz'`, returns `r23DefaultParams(environment)` unchanged. For `'2p7ghz'`, starts from that struct and overrides `bs.*`, `aas.*`, `deployment.*`, and `metadata.*`. |
-| `matlab/test_imtBandDefaultParams.m` | Field values, the 46.06 + 26.22 = 72.28 identity, and `isequal` with `r23DefaultParams` for `'7ghz'`. |
+| `matlab/imtBandDefaultParams.m` | `params = imtBandDefaultParams(band, environment)`. For `'7ghz'`, returns `r23DefaultParams(environment)` unchanged. For `'2p7ghz'`, starts from that struct and overrides `bs.*` (power, frequency), `aas.*` (4 x 8 table), and `metadata.*`. Leaves `deployment.*` untouched. |
+| `matlab/test_imtBandDefaultParams.m` | Field values, the 58.78 + 26.22 = 85.0 identity, and `isequal` with `r23DefaultParams` for `'7ghz'`. |
 | `matlab/test_runR23AasEirpCdfGrid_band2p7.m` | Runner-level invariants. See [Acceptance tests](#acceptance-tests). |
 | `matlab/test_band2p7_phased_crosscheck.m` | Optional independent pattern check. Skips cleanly without Phased Array System Toolbox. |
 | `examples/runBand2p7EirpCdfGridExample.m` | Short worked example. |
-| `artifacts/golden/band2p7_urban_baseline_small_grid_v1/` | Frozen golden reference, created only after D1-D4 are approved. |
+| `artifacts/golden/band2p7_urban_small_grid_v1/` | Frozen golden reference, created after the power interpretation is confirmed. |
 
 ### Files to edit
 
 | File | Change |
 | --- | --- |
-| `matlab/aasGeometryPreset.m` | Add preset `itu_2p7ghz_4x8` (aliases `2p7ghz_4x8`, `2p7ghz`): 4 x 8, 3 x 1 sub-array, 0.7 / 0.5 / 2.1 lambda, 3 degree sub-array tilt, 6 degree mechanical tilt, 6.4 dBi, 72.28 dBm, 46.06 dBm. Update the help text and the unknown-preset error message. |
-| `matlab/runR23AasEirpCdfGrid.m` | In the argument-resolution block (near lines 2175-2240), read `band` from flat opts or name-value pairs, call `imtBandDefaultParams` in place of `r23DefaultParams` when it's set, and pick the band's default geometry preset. Stamp `metadata.band`, `metadata.eirpReferenceBandwidthMHz`, and the source string. Add `band` to the help text. |
-| `matlab/r23ScenarioPreset.m` | Add `2p7ghz-urban-baseline` and `2p7ghz-suburban-baseline` with their own seeds and source strings. |
+| `matlab/aasGeometryPreset.m` | Add preset `itu_2p7ghz_4x8` (aliases `2p7ghz_4x8`, `2p7ghz`): 4 x 8, 3 x 1 sub-array, 0.7 / 0.5 / 2.1 lambda, 3 degree sub-array tilt, 6 degree mechanical tilt, 6.4 dBi, `sectorEirpDbm = 85.0`, `conductedPowerDbm = 58.78`. Update the help text and the unknown-preset error message. |
+| `matlab/runR23AasEirpCdfGrid.m` | In the argument-resolution block (near lines 2175-2240), read `band` from flat opts or name-value pairs, call `imtBandDefaultParams` in place of `r23DefaultParams` when it's set, and pick the band's default geometry preset. Stamp `metadata.band`, `metadata.powerBasis = '47 CFR Part 27, 65 dBm/MHz EIRP'`, `metadata.deploymentSource`, and the source string. Add `band` to the help text. |
+| `matlab/r23ScenarioPreset.m` | Add `2p7ghz-urban` and `2p7ghz-suburban` with their own seeds and source strings. |
 | `matlab/r23GoldenReferenceScenario.m`, `freezeR23GoldenReference.m`, `verifyR23GoldenReference.m` | Register the new golden name. |
 | `matlab/imtAasSubbandEnvelope.m` | Line 125 falls back to `defSectorEirp = 78.3`. Confirm the runner always passes the real sector EIRP so the fallback never applies at 2.7 GHz. Add a test for it. |
 | `matlab/imtAasApplyEpreEnvelope.m` | A note string hard-codes "78.3 dBm". Build it from the actual sector EIRP. Keep the 7 GHz string byte-identical. |
-| `matlab/imtAasAssumptionsTable.m` | Add the band row and check the table reads the 2.7 GHz values, not constants. |
+| `matlab/imtAasDlFrameTimeBudget.m`, `imtAasSsbOption.m` | Add band defaults for the SSB layer. See [Optional layers](#optional-layers-at-27-ghz). |
+| `matlab/imtAasAssumptionsTable.m` | Add the band, power-basis, and deployment-source rows. |
 | `run_all_tests.m` | Register the new tests. |
 | `init_run_imt_matlab_rev4.m` | Add `rev_num` blocks 34 and up. See [Entry-script runs](#entry-script-runs). |
-| `README.md`, `CLAUDE.md` | Add a "Band option" section stating the invariants below. |
+| `README.md`, `CLAUDE.md` | Add a "Band option" section stating the invariants and the Part 27 power basis. |
 
 ### Audit of hard-coded 7 GHz values
 
 A search of the function bodies (tests and comments excluded) found band
-constants in these files. Each needs a decision of "parameterize" or "leave
-as the 7 GHz default":
+constants in these files:
 
 - `aasGeometryPreset.m`, `r23DefaultParams.m`, `r23ScenarioPreset.m`,
   `imtAasDefaultParams.m`: defaults. Leave as is; the band layer overrides
   them.
-- `imtAasSubbandEnvelope.m`, `imtAasApplyEpreEnvelope.m`: fallbacks and note
-  strings. Fix as listed above.
-- `get_default_bs.m`, `imt_r23_aas_defaults.m`: the two other API families
-  (single-sector MVP and snake_case Monte Carlo). **Out of scope for the
-  first pass.** The entry script uses only `runR23AasEirpCdfGrid`.
+- `imtAasSubbandEnvelope.m`, `imtAasApplyEpreEnvelope.m`: fallback and note
+  string. Fix as listed above.
+- `get_default_bs.m`, `imt_r23_aas_defaults.m`: the single-sector MVP and
+  snake_case Monte Carlo families. **Out of scope for the first pass.** The
+  entry script uses only `runR23AasEirpCdfGrid`.
 
-### Frequency-dependent options to review
+### Optional layers at 2.7 GHz
 
-These default-off layers carry 3GPP assumptions that were chosen for 7 GHz:
-
-- **`opts.ssb`:** `imtAasDlFrameTimeBudget` defaults to 30 kHz sub-carrier
-  spacing. The SSB burst size depends on the SSB case, the duplex mode, and
-  the carrier frequency (TS 38.213 clause 4.1), and the sweep tiers were
-  sized for the narrower 8 x 16 beams. Set band defaults after D4.
-- **`opts.beamSelection = 'codebook'`:** the DFT codebook must take its
-  port layout from the 4 x 8 geometry, and the layout must be a supported
-  (N1, N2) pair in TS 38.214 Table 5.2.2.2.1-2. Add a test.
-- **`opts.subband`, `opts.epre`, `opts.prbWeighting`:** all use the channel
-  bandwidth from D3. No code change expected.
-- **`opts.layering`:** `maxTotalLayers = 8` is still valid for 32 ports.
+- **`opts.ssb`:** keep 30 kHz sub-carrier spacing (100 MHz TDD). For
+  unpaired spectrum with SSB case C, TS 38.213 clause 4.1 gives a maximum
+  of 8 SSB beams above its frequency threshold, and 2 750 MHz is above that
+  threshold. Set the 2.7 GHz default to 8 and confirm against the 38.213
+  release you cite. The sweep tiers were sized for the narrower 8 x 16
+  beams; re-tile them for the 12.7 by 6.0 degree beams.
+- **`opts.beamSelection = 'codebook'`:** take the port layout from the
+  4 x 8 geometry (32 ports, (N1, N2) = (8, 2) per polarization). Confirm it
+  is a supported pair in TS 38.214 Table 5.2.2.2.1-2 and add a test.
+- **`opts.subband`:** the headline peak becomes exactly 85.0 - 20 =
+  **65.0 dBm/MHz**, the Part 27 limit. This is a built-in check.
+- **`opts.epre`, `opts.prbWeighting`, `opts.layering`:** no change expected.
+  `maxTotalLayers = 8` is still valid for 32 ports.
 
 ## Implementation phases
 
 | Phase | Work | Exit criterion |
 | --- | --- | --- |
-| 0 | Settle D1-D4. Confirm the antenna table against 5D/716 Annex 4.4. | Parameter table signed off. |
+| 0 | Confirm the 65 dBm/MHz reading and the ITU table against 5D/716 Annex 4.4. | Parameter table signed off. |
 | 1 | Add the `itu_2p7ghz_4x8` preset and `imtBandDefaultParams`, with unit tests. | `run_all_tests` passes; 7 GHz goldens verify unchanged. |
-| 2 | Wire `opts.band` into `runR23AasEirpCdfGrid`; fix the two hard-coded strings and fallback; add the runner test. | Acceptance tests 1-6 pass. |
+| 2 | Wire `opts.band` into `runR23AasEirpCdfGrid`; fix the fallback and note string; add the runner test. | Acceptance tests 1-7 pass. |
 | 3 | Add scenario presets, the golden reference, and the optional Phased Array cross-check. | Golden frozen and verified; cross-check within tolerance or skipped with a stated reason. |
-| 4 | Review `opts.ssb` and codebook defaults for 2.7 GHz. | Tests for each layer pass with `band = '2p7ghz'`. |
+| 4 | Set SSB and codebook defaults for 2.7 GHz. | Tests for each layer pass with `band = '2p7ghz'`. |
 | 5 | Add entry-script runs, the example, and the README and `CLAUDE.md` sections. Regenerate the readiness report. | Baseline 2.7 GHz heatmaps produced; report written. |
 
 Each phase follows the MATLAB execution rule in `CLAUDE.md`: run
@@ -203,22 +238,25 @@ Each phase follows the MATLAB execution rule in `CLAUDE.md`: run
 2. **Gain identity.** `aasGeometryPreset('itu_2p7ghz_4x8')` returns
    `calculatedAntennaGainDbi` within 0.01 dB of 26.22 and 192 total
    elements.
-3. **Power identity.** Conducted power plus peak gain equals the sector
-   EIRP within 0.01 dB, and `max(stats.max_dBm(:))` is at most 72.28 dBm.
-   The existing power self-check passes.
-4. **Single-beam peak.** One UE at the nominal boresight direction reaches
-   the sector EIRP within the same grid-miss tolerance the 7 GHz test uses.
-5. **Existing invariants hold at 2.7 GHz.** Percentile-map monotonicity,
+3. **Power identity.** Conducted power plus peak gain equals 85.0 dBm within
+   0.01 dB, and `max(stats.max_dBm(:))` is at most 85.0 dBm. The existing
+   power self-check passes.
+4. **Part 27 compliance.** With `opts.subband` on, the per-subband density
+   never exceeds 65.0 dBm/MHz in any cell, and the headline peak equals
+   65.0 within 1e-9.
+5. **Single-beam peak.** One UE at the nominal boresight direction reaches
+   85.0 dBm within the same grid-miss tolerance the 7 GHz test uses.
+6. **Existing invariants hold at 2.7 GHz.** Percentile-map monotonicity,
    histogram count totals, CDF endpoints, seed reproducibility, and chunked
    versus unchunked equality.
-6. **Metadata.** `metadata.band`, `frequencyMHz`, the geometry preset name,
-   and the source string all report the 2.7 GHz values.
-7. **Independent pattern check (optional).** A Phased Array System Toolbox
+7. **Metadata.** `metadata.band`, `frequencyMHz = 2750`, the geometry preset
+   name, `powerBasis`, and `deploymentSource` report the 2.7 GHz values.
+8. **Independent pattern check (optional).** A Phased Array System Toolbox
    model of the same 4 x 8 array with 3-element sub-arrays agrees with
    `imtAasCompositeGain` on the main lobe and first sidelobes for three
-   steering directions. This is a test-only dependency; the core path stays
+   steering directions. Test-only dependency; the core path stays
    toolbox-free.
-8. **Pycraf strict gate.** Unchanged and still passing, because no antenna
+9. **Pycraf strict gate.** Unchanged and still passing, because no antenna
    math files are edited.
 
 ## Entry-script runs
@@ -228,13 +266,12 @@ grid, bin edges, and percentile list as `rev_num = 33`:
 
 | `rev_num` | Configuration | Purpose |
 | --- | --- | --- |
-| 34 | `band = '2p7ghz'`, urban, `outputDomain = 'both'`, pointing histogram on | 2.7 GHz baseline EIRP and gain heatmaps |
-| 35 | Same, suburban | Deployment sensitivity |
-| 36 | Urban, with `opts.subband` enabled | Narrowband-victim density (see the next section) |
-| 37 | Urban, D1 option (b) preset, if one is supplied | Industry-case sensitivity |
+| 34 | `band = '2p7ghz'`, `outputDomain = 'both'`, pointing histogram on | 2.7 GHz baseline EIRP and gain heatmaps at 85.0 dBm |
+| 35 | Same, with `opts.subband` on | Narrowband density; checks the 65 dBm/MHz ceiling |
+| 36 | Same as 34, with `sectorEirpDbm = 72.28` and `conductedPowerDbm = 46.06` | ITU-power sensitivity, to show the Part 27 versus ITU difference |
 
 The script's plot code uses fixed axis and color limits in places. Check
-them against the lower 2.7 GHz EIRP range when the first run completes.
+them against the 2.7 GHz EIRP range when the first run completes.
 
 ## What to look at for radar victims
 
@@ -242,42 +279,42 @@ These points are about using the output, not about the code change:
 
 - **Above-horizon cells matter most.** With 6 degree mechanical tilt and
   beams steered at or below the horizon, a radar near the horizon sits in
-  the upper sidelobes. The 2.1 lambda sub-array spacing puts a vertical
-  grating lobe about 28 degrees from the steered beam, the same as at
-  7 GHz, but the main beam is twice as wide. Report percentile maps for
-  elevations from 0 to about +30 degrees separately.
+  the upper sidelobes. The vertical grating lobe sits about 28 degrees from
+  the steered beam, and the main beam is twice as wide as at 7 GHz. Report
+  percentile maps for elevations from 0 to about +30 degrees separately.
 - **Narrowband density may be the binding metric.** If the radar receiver
-  bandwidth is narrow compared with the IMT channel, the band-integrated
-  dBm per channel understates what one receiver sees. `opts.subband`
-  already models this. Take the receiver bandwidths from the link budget
-  paper and check the `subbandMHz <= bandwidthMHz / N` validity flag.
+  bandwidth is narrow compared with 100 MHz, the band-integrated EIRP
+  understates what one receiver sees. `opts.subband` models this, and its
+  peak lands on the Part 27 limit. Take the receiver bandwidths from the
+  link budget paper and check the `subbandMHz <= bandwidthMHz / N` validity
+  flag.
 - **Downstream handoff.** `export_eirp_percentile_table` writes the
-  per-angle percentile table. Confirm the column layout that the aggregate
-  Monte Carlo expects for its base-station EIRP input before you export a
-  2.7 GHz table for it.
+  per-angle percentile table. Confirm the column layout the aggregate Monte
+  Carlo expects for its base-station EIRP input before you export a 2.7 GHz
+  table for it.
 
 ## Out of scope
 
 Unchanged from `CLAUDE.md`: path loss, clutter, frequency-dependent
 rejection, receiver I/N, victim antennas, multi-site aggregation, and
-out-of-band or spurious emissions. This plan also leaves the single-sector
-MVP and snake_case Monte Carlo API families at 7 GHz.
+out-of-band or spurious emissions. Also out of scope: a 2.7 GHz deployment
+table, and the single-sector MVP and snake_case Monte Carlo API families.
 
 ## Risks
 
 | Risk | Mitigation |
 | --- | --- |
-| The ITU table is a WRC-23-era generic set, not a 2.7 GHz-specific or US-specific one. | Decision D1; keep it labeled as the ITU baseline and add other sets as named presets. |
-| EIRP reference bandwidth is misread (per channel versus per 100 MHz). | Decision D3; stamp `eirpReferenceBandwidthMHz` in metadata; test the dBm/MHz conversion. |
-| A hidden 7 GHz constant leaks into a 2.7 GHz result. | The audit above, plus a test that runs every optional layer with `band = '2p7ghz'` and checks no output exceeds 72.28 dBm where the layer conserves power. |
+| The 65 dBm figure is misread (per MHz versus per sector). | Confirm in phase 0; stamp `powerBasis` in metadata; acceptance test 4 checks the per-MHz ceiling directly. |
+| Part 27 power on an ITU-sized panel is a mixed assumption: the ITU panel was sized for 72.28 dBm, so reaching 85.0 dBm takes 12.7 dB more conducted power per sub-array. | State it in metadata and the README; keep run 36 as the ITU-power comparison. |
+| Inherited 7 GHz deployment geometry shapes the near-horizon CDF. | Stamp `deploymentSource`; allow a later override. |
+| A hidden 7 GHz constant leaks into a 2.7 GHz result. | The audit above, plus a test that runs every optional layer with `band = '2p7ghz'` and checks no power-conserving output exceeds 85.0 dBm. |
 | A 7 GHz regression. | Byte-identical tests and the three existing goldens. |
 
 ## Review status
 
-- Arithmetic for the derived values was run for this plan.
+- Arithmetic for the gain, power, and density values was run for this plan.
 - The file audit is a static read of the repo at commit `f1adb8d`.
 - MATLAB wasn't run. No tests were executed.
-- Parameter choices (D1-D4) need your review before any preset is frozen.
 
 ## References
 
@@ -287,5 +324,7 @@ MVP and snake_case Monte Carlo API families at 7 GHz.
 - ITU-R WP 5D, Document 5D/TEMP/628(Rev.2), Table 5 (public copy used to
   read the 1 710-4 990 MHz values):
   <https://iafi.in/system/libraries/static/uploads/contribution/File-%201229.pdf>
+- 47 CFR 27.50 and 24.232 (per-MHz base-station EIRP limits, 1640 and
+  3280 W/MHz).
 - Recommendation ITU-R M.2101-0, Annex 1, section 5.
 - 3GPP TS 38.213 clause 4.1 and TS 38.214 Table 5.2.2.2.1-2.
