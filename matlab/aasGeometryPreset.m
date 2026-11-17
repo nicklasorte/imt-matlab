@@ -73,6 +73,31 @@ function geom = aasGeometryPreset(presetName, varargin)
 %         Total physical elements across two polarizations = 128.
 %         Calculated antenna gain ~= 24.46 dBi (= 6.4 + 10*log10(8*8)).
 %
+%     "itu_2p7ghz_4x8"
+%         2.7 GHz (2700-2800 MHz, TDD) macro AAS. Antenna geometry from
+%         the ITU-R WP 5D table "Beamforming antenna characteristics for
+%         IMT in 1 710-4 990 MHz" (Doc. 5D/716 Annex 4.4): 4x8 sub-arrays
+%         per polarization with 3 elements per sub-array. Sector EIRP is
+%         set to the 47 CFR Part 27 base-station limit of 65 dBm/MHz over
+%         a 100 MHz channel (= 85 dBm / 100 MHz), NOT the ITU table value
+%         of 72.28 dBm; conducted power is the EIRP minus the calculated
+%         antenna gain so the power accounting stays self-consistent.
+%             arrayRows                                   = 4
+%             arrayCols                                   = 8
+%             subarrayElementRows                         = 3
+%             subarrayElementCols                         = 1
+%             subarrayElementVerticalSpacingLambda        = 0.7
+%             radiatingSubarrayHorizontalSpacingLambda    = 0.5
+%             radiatingSubarrayVerticalSpacingLambda      = 2.1
+%             subarrayDowntiltDeg                         = 3
+%             mechanicalDowntiltDeg                       = 6
+%             elementGainDbi                              = 6.4
+%             sectorEirpDbm                               = 85.0
+%             conductedPowerDbm                           = 85.0 - 26.22
+%                                                         ~= 58.78
+%         Total physical elements across two polarizations = 192.
+%         Calculated antenna gain ~= 26.22 dBi (= 6.4 + 10*log10(3*32)).
+%
 %     "custom"
 %         All required geometry fields must be supplied as Name,Value
 %         overrides. Use this for explicit sensitivity studies.
@@ -185,6 +210,28 @@ function geom = aasGeometryPreset(presetName, varargin)
                 'conductedPowerDbm',                        37.0);
             requireAllFields = false;
 
+        case {'itu_2p7ghz_4x8', 'itu-2p7ghz-4x8', '2p7ghz_4x8', '2p7ghz'}
+            canonical = 'itu_2p7ghz_4x8';
+            % ITU-R 1 710-4 990 MHz AAS antenna table; Part 27 power.
+            % 65 dBm/MHz * 100 MHz = 85 dBm sector EIRP. Conducted power
+            % = EIRP - (elementGain + 10*log10(subarray) + 10*log10(array)).
+            sectorEirp2p7 = 65 + 10 * log10(100);
+            gain2p7       = 6.4 + 10 * log10(3 * 1) + 10 * log10(4 * 8);
+            base = struct( ...
+                'arrayRows',                                4, ...
+                'arrayCols',                                8, ...
+                'subarrayElementRows',                      3, ...
+                'subarrayElementCols',                      1, ...
+                'subarrayElementVerticalSpacingLambda',     0.7, ...
+                'radiatingSubarrayHorizontalSpacingLambda', 0.5, ...
+                'radiatingSubarrayVerticalSpacingLambda',   2.1, ...
+                'subarrayDowntiltDeg',                      3, ...
+                'mechanicalDowntiltDeg',                    6, ...
+                'elementGainDbi',                           6.4, ...
+                'sectorEirpDbm',                            sectorEirp2p7, ...
+                'conductedPowerDbm',                        sectorEirp2p7 - gain2p7);
+            requireAllFields = false;
+
         case 'custom'
             canonical = 'custom';
             base = struct();
@@ -194,7 +241,7 @@ function geom = aasGeometryPreset(presetName, varargin)
             error('aasGeometryPreset:unknownPreset', ...
                 ['Unknown aasGeometryPreset "%s". Supported: ' ...
                  '"r23_1x3_default", "ctia_7ghz_1x6", "r23_micro_8x8", ' ...
-                 '"custom".'], ...
+                 '"itu_2p7ghz_4x8", "custom".'], ...
                 presetName);
     end
 
@@ -247,6 +294,18 @@ function geom = aasGeometryPreset(presetName, varargin)
         if geom.totalPhysicalElementsAcrossPolarizations ~= 768
             error('aasGeometryPreset:ctiaElementCountMismatch', ...
                 ['ctia_7ghz_1x6 preset must yield 768 physical elements ' ...
+                 'across two polarizations (got %d). This indicates a ' ...
+                 'preset-table regression.'], ...
+                geom.totalPhysicalElementsAcrossPolarizations);
+        end
+    end
+
+    % Sanity check for the named 2.7 GHz preset: 2 pol x 4 x 8 x 3 = 192
+    % physical elements unless explicitly overridden.
+    if strcmp(canonical, 'itu_2p7ghz_4x8') && ~geom.hasOverrides
+        if geom.totalPhysicalElementsAcrossPolarizations ~= 192
+            error('aasGeometryPreset:band2p7ElementCountMismatch', ...
+                ['itu_2p7ghz_4x8 preset must yield 192 physical elements ' ...
                  'across two polarizations (got %d). This indicates a ' ...
                  'preset-table regression.'], ...
                 geom.totalPhysicalElementsAcrossPolarizations);

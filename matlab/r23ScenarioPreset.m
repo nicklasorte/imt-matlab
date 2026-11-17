@@ -35,6 +35,28 @@ function params = r23ScenarioPreset(presetName, varargin)
 %           - channelBandwidth_MHz    = 100
 %           - randomSeed              = 20260102 (stable, reproducible)
 %
+%       "2p7ghz-urban"
+%           2.7 GHz band option (built on imtBandDefaultParams('2p7ghz')):
+%           ITU 1 710-4 990 MHz 4x8 AAS antenna, Part 27 power.
+%           - environment             = "urban"
+%           - cellRadius_m            = 400   (ITU 2-3 GHz table)
+%           - bsHeight_m              = 20    (ITU 2-3 GHz table)
+%           - bsDensityPerKm2         = 10    (inherited)
+%           - numUesPerSector         = 3
+%           - maxEirpPerSector_dBm    = 85    (65 dBm/MHz x 100 MHz)
+%           - channelBandwidth_MHz    = 100   (2700-2800 MHz)
+%           - randomSeed              = 20261101
+%
+%       "2p7ghz-suburban"
+%           - environment             = "suburban"
+%           - cellRadius_m            = 800
+%           - bsHeight_m              = 25
+%           - bsDensityPerKm2         = 2.4   (inherited)
+%           - numUesPerSector         = 3
+%           - maxEirpPerSector_dBm    = 85
+%           - channelBandwidth_MHz    = 100
+%           - randomSeed              = 20261102
+%
 %   Optional name-value overrides (forwarded into the corresponding
 %   nested params field; unknown names raise an error):
 %       'numUesPerSector'        -> params.ue.numUesPerSector
@@ -83,7 +105,8 @@ function params = r23ScenarioPreset(presetName, varargin)
     if nargin < 1 || isempty(presetName)
         error('r23ScenarioPreset:missingPreset', ...
             ['PRESETNAME is required. Supported presets: ' ...
-             '"urban-baseline", "suburban-baseline".']);
+             '"urban-baseline", "suburban-baseline", "2p7ghz-urban", ' ...
+             '"2p7ghz-suburban".']);
     end
     if isstring(presetName) && isscalar(presetName)
         presetName = char(presetName);
@@ -95,6 +118,7 @@ function params = r23ScenarioPreset(presetName, varargin)
 
     presetKey = lower(strtrim(presetName));
 
+    band = '7ghz';
     switch presetKey
         case {'urban-baseline', 'urban_baseline', 'urbanbaseline'}
             canonicalName     = 'urban-baseline';
@@ -128,14 +152,55 @@ function params = r23ScenarioPreset(presetName, varargin)
                                  '8x16 sub-array, 78.3 dBm sector EIRP / ' ...
                                  '100 MHz)'];
 
+        case {'2p7ghz-urban', '2p7ghz_urban', '2p7ghzurban'}
+            band              = '2p7ghz';
+            canonicalName     = '2p7ghz-urban';
+            scenarioCategory  = 'band-2p7ghz';
+            environment       = 'urban';
+            cellRadius_m      = 400;
+            bsHeight_m        = 20;
+            bsDensityPerKm2   = 10;
+            numUesPerSector   = 3;
+            maxEirpDbm        = 65 + 10 * log10(100);
+            channelBwMHz      = 100;
+            randomSeed        = 20261101;
+            sourceReference   = ['2.7 GHz macro urban: ITU-R 5D/716 Annex ' ...
+                                 '4.4 1 710-4 990 MHz AAS table (4x8 ' ...
+                                 'sub-array), 47 CFR Part 27 power ' ...
+                                 '(65 dBm/MHz = 85 dBm / 100 MHz), ITU ' ...
+                                 '2-3 GHz BS height / cell radius'];
+
+        case {'2p7ghz-suburban', '2p7ghz_suburban', '2p7ghzsuburban'}
+            band              = '2p7ghz';
+            canonicalName     = '2p7ghz-suburban';
+            scenarioCategory  = 'band-2p7ghz';
+            environment       = 'suburban';
+            cellRadius_m      = 800;
+            bsHeight_m        = 25;
+            bsDensityPerKm2   = 2.4;
+            numUesPerSector   = 3;
+            maxEirpDbm        = 65 + 10 * log10(100);
+            channelBwMHz      = 100;
+            randomSeed        = 20261102;
+            sourceReference   = ['2.7 GHz macro suburban: ITU-R 5D/716 ' ...
+                                 'Annex 4.4 1 710-4 990 MHz AAS table ' ...
+                                 '(4x8 sub-array), 47 CFR Part 27 power ' ...
+                                 '(65 dBm/MHz = 85 dBm / 100 MHz), ITU ' ...
+                                 '2-3 GHz BS height / cell radius'];
+
         otherwise
             error('r23ScenarioPreset:unknownPreset', ...
                 ['Unknown scenario preset "%s". Supported presets: ' ...
-                 '"urban-baseline", "suburban-baseline".'], presetName);
+                 '"urban-baseline", "suburban-baseline", "2p7ghz-urban", ' ...
+                 '"2p7ghz-suburban".'], presetName);
     end
 
     % ---- build base nested params from r23DefaultParams ---------------
-    params = r23DefaultParams(environment);
+    if strcmp(band, '7ghz')
+        params = r23DefaultParams(environment);
+    else
+        params = imtBandDefaultParams(band, environment);
+    end
 
     % ---- pin baseline canonical fields --------------------------------
     params.deployment.cellRadius_m       = cellRadius_m;

@@ -87,6 +87,23 @@ function out = runR23AasEirpCdfGrid(varargin)
 %              fields must be supplied. See aasGeometryPreset for the
 %              full list of override names.
 %
+%   Band option (non-breaking; default absent == R23 7.125-8.4 GHz):
+%       runR23AasEirpCdfGrid('band', '2p7ghz')
+%           -> 2.7 GHz TDD macro case (2700-2800 MHz, centre 2750 MHz,
+%              100 MHz channel) from imtBandDefaultParams: ITU-R 1 710-
+%              4 990 MHz 4x8 AAS antenna (aasGeometryPreset
+%              'itu_2p7ghz_4x8', 26.22 dBi), 47 CFR Part 27 power
+%              (65 dBm/MHz = 85 dBm / 100 MHz), ITU 2-3 GHz BS height and
+%              cell radius (urban 20 m / 400 m, suburban 25 m / 800 m).
+%           opts.band = '7ghz' is the R23 default made explicit. An
+%           explicit aasGeometryPreset still wins over the band default;
+%           out.metadata.bandPresetMismatch flags a cross-band preset.
+%           When no band is given, every output is byte-identical to the
+%           historical path and no band metadata fields are added. Nested
+%           params carrying metadata.band (imtBandDefaultParams,
+%           r23ScenarioPreset('2p7ghz-urban'|'2p7ghz-suburban')) select
+%           the band's default geometry automatically.
+%
 %   Beam selection (non-breaking; default 'ideal'):
 %       runR23AasEirpCdfGrid('beamSelection', 'codebook', ...
 %                            'codebookOversample', [4 4])
@@ -1698,6 +1715,42 @@ function out = runR23AasEirpCdfGrid(varargin)
     metadata.aasGeometry                   = geomMeta;
     metadata.aasGeometryPreset             = geom.presetName;
 
+    % ---- band option metadata (additive; only when a band resolved) --
+    if isfield(opts, 'band') && ~isempty(opts.band)
+        metadata.band = opts.band;
+        presetBand = '';
+        switch geom.presetName
+            case 'itu_2p7ghz_4x8'
+                presetBand = '2p7ghz';
+            case {'r23_1x3_default', 'ctia_7ghz_1x6', 'r23_micro_8x8'}
+                presetBand = '7ghz';
+        end
+        metadata.bandPresetMismatch = ~isempty(presetBand) && ...
+            ~strcmp(presetBand, opts.band);
+        nmb = struct();
+        if isfield(nestedParams, 'metadata') && isstruct(nestedParams.metadata)
+            nmb = nestedParams.metadata;
+        end
+        bsb = nestedParams.bs;
+        if strcmp(opts.band, '2p7ghz')
+            metadata.model = '2.7 GHz Extended AAS (ITU 1 710-4 990 MHz table)';
+        end
+        metadata.bandLabel        = getFieldOr(nmb, 'bandLabel', ...
+            'R23 7.125-8.4 GHz');
+        metadata.powerBasis       = getFieldOr(nmb, 'powerBasis', ...
+            'ITU-R R23 7.125-8.4 GHz macro sector EIRP');
+        metadata.antennaSource    = getFieldOr(nmb, 'antennaSource', ...
+            'ITU-R R23 7.125-8.4 GHz Extended AAS table');
+        metadata.deploymentSource = getFieldOr(nmb, 'deploymentSource', ...
+            'r23DefaultParams');
+        metadata.frequencyRange_MHz = getFieldOr(bsb, 'frequencyRange_MHz', []);
+        metadata.duplex             = getFieldOr(bsb, 'duplex', 'TDD');
+        metadata.eirpDensityLimit_dBmPerMHz = ...
+            getFieldOr(bsb, 'eirpDensityLimit_dBmPerMHz', []);
+        metadata.peakEirpDensity_dBmPerMHz = params.sectorEirpDbm - ...
+            10 * log10(params.bandwidthMHz);
+    end
+
     metadata.includesPathLoss              = false;
     metadata.includesReceiverAntenna       = false;
     metadata.includesReceiverGain          = false;
@@ -1884,6 +1937,10 @@ function out = runR23AasEirpCdfGrid(varargin)
     if isstruct(opts.epre) && isfield(opts.epre, 'enable') && opts.epre.enable
         epreOffsets = imtAasEpreOffsets(opts.epre);
         epreApplyOpts = struct('percentiles', opts.percentiles);
+        if isfield(opts, 'band') && ~isempty(opts.band)
+            % Band option: let the notes quote the actual sector peak.
+            epreApplyOpts.sectorEirpDbm = params.sectorEirpDbm;
+        end
         if isfield(out, 'ssb') && isstruct(out.ssb) && ...
                 isfield(out.ssb, 'envelope_dBm') && ~isempty(out.ssb.envelope_dBm)
             % CSI-RS-class offset rides the sweep-class envelope only.
@@ -2172,6 +2229,21 @@ function [opts, nestedParams, geom] = resolveInputs(args)
              'params from r23DefaultParams) or a name/value string.']);
     end
 
+    % ---- band option (non-breaking; default absent == 7 GHz R23) -----
+    % An explicit band ('band' name-value pair or opts.band) selects the
+    % band's nested defaults (imtBandDefaultParams) and the band's default
+    % AAS geometry preset. When no band is given anywhere, the historical
+    % r23DefaultParams / 'r23_1x3_default' path is used unchanged.
+    bandKey = '';
+    bandRaw = peekNameValue(rest, 'band');
+    if isempty(bandRaw) && isstruct(opts) && isfield(opts, 'band') && ...
+            ~isempty(opts.band)
+        bandRaw = opts.band;
+    end
+    if ~isempty(bandRaw)
+        bandKey = imtBandName(bandRaw);
+    end
+
     % If no nested params yet and an "environment" hint may be in the
     % name-value pairs, peek ahead so we can use the right preset.
     if isempty(nestedParams)
@@ -2183,13 +2255,19 @@ function [opts, nestedParams, geom] = resolveInputs(args)
             elseif isstruct(opts) && isfield(opts, 'deployment') && ~isempty(opts.deployment)
                 envFromOpts = opts.deployment;
             end
-            if ~isempty(envFromOpts)
+            if ~isempty(bandKey)
+                nestedParams = imtBandDefaultParams(bandKey, envFromOpts);
+            elseif ~isempty(envFromOpts)
                 nestedParams = r23DefaultParams(envFromOpts);
             else
                 nestedParams = r23DefaultParams();
             end
         else
-            nestedParams = r23DefaultParams(env);
+            if ~isempty(bandKey)
+                nestedParams = imtBandDefaultParams(bandKey, env);
+            else
+                nestedParams = r23DefaultParams(env);
+            end
         end
     end
 
@@ -2227,11 +2305,29 @@ function [opts, nestedParams, geom] = resolveInputs(args)
         opts = rmfield(opts, 'params');
     end
 
+    % Band carried by nested params (imtBandDefaultParams /
+    % r23ScenarioPreset 2.7 GHz presets) when no explicit band was given.
+    if isempty(bandKey) && isstruct(nestedParams) && ...
+            isfield(nestedParams, 'metadata') && isstruct(nestedParams.metadata) && ...
+            isfield(nestedParams.metadata, 'band') && ~isempty(nestedParams.metadata.band)
+        bandKey = imtBandName(nestedParams.metadata.band);
+    end
+
     if isempty(geomPresetName)
-        geomPresetName = 'r23_1x3_default';
+        if strcmp(bandKey, '2p7ghz')
+            geomPresetName = 'itu_2p7ghz_4x8';
+        else
+            geomPresetName = 'r23_1x3_default';
+        end
     end
     geomOverrideArgs = structToNameValueCell(geomOverrides);
     geom = aasGeometryPreset(geomPresetName, geomOverrideArgs{:});
+
+    % Record the resolved band on opts ONLY when a band was resolved, so
+    % the historical (band-absent) opts / metadata field sets are unchanged.
+    if ~isempty(bandKey)
+        opts.band = bandKey;
+    end
 end
 
 function [geomNv, opts] = extractGeometryNvFromOpts(opts)
@@ -3034,5 +3130,14 @@ function writeMetadataSidecar(metadata, sidecarPath)
                 fprintf(fid, '%s = <unprintable>\n', flds{k});
             end
         end
+    end
+end
+
+function v = getFieldOr(s, name, default)
+%GETFIELDOR Return s.(name) when present and non-empty, else DEFAULT.
+    if isstruct(s) && isfield(s, name) && ~isempty(s.(name))
+        v = s.(name);
+    else
+        v = default;
     end
 end

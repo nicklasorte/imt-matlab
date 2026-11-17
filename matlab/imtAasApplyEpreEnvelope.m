@@ -113,9 +113,16 @@ function result = imtAasApplyEpreEnvelope(stats, offsets, applyOpts)
     result.perRePeakEnvelope_dBm   = perRePeakEnvelope_dBm;
     result.perRePeakPercentileMaps = perRePeakPercentileMaps;
     result.csirsClassEnvelope_dBm  = csirsClassEnvelope_dBm;
+    sectorPeakForNotes = getf(applyOpts, 'sectorEirpDbm', []);
+    if isempty(sectorPeakForNotes)
+        sectorPeakText = '78.3 dBm';   % historical R23 baseline wording
+    else
+        sectorPeakText = sprintf('%.4g dBm', double(sectorPeakForNotes));
+    end
     result.notes = ['per-RE worst-case EIRP density; power-conserving ', ...
         'over a slot/BW; NOT additive with the band-integrated dBm/MHz ', ...
-        'CDF; may exceed the 78.3 dBm band-integrated sector peak by design.'];
+        'CDF; may exceed the ', sectorPeakText, ...
+        ' band-integrated sector peak by design.'];
     if isfield(offsets, 'specReference')
         result.specReference = offsets.specReference;
     else
