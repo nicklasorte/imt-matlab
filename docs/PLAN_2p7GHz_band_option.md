@@ -3,7 +3,7 @@
 **Status:** DRAFT // PRE-DECISIONAL. Plan only. No code has changed and no
 MATLAB tests have run for this plan.
 
-**Date:** 2026-11-17 (rev 2: decisions D1-D4 settled)
+**Date:** 2026-11-17 (rev 3: ITU BS height and cell radius added)
 
 **Goal:** Let `runR23AasEirpCdfGrid` and `init_run_imt_matlab_rev4.m` produce
 the base-station EIRP distribution for a 2.7 GHz IMT deployment in
@@ -22,15 +22,17 @@ the base-station EIRP distribution for a 2.7 GHz IMT deployment in
   table's 72.28 dBm. The extra power goes into conducted power; the antenna
   geometry stays the ITU geometry.
 - **Band:** TDD, 2700-2800 MHz, center frequency 2 750 MHz, 100 MHz channel.
-- **Deployment:** no new deployment parameters. The run inherits the
-  existing defaults. See [Deployment](#deployment).
+- **Deployment:** BS height and cell radius from the ITU deployment table
+  for bands between 2 and 3 GHz: 20 m and 0.4 km urban, 25 m and 0.8 km
+  suburban. No other deployment parameters are added. See
+  [Deployment](#deployment).
 
 ## Decisions (settled 2026-11-17)
 
 | ID | Decision | Setting |
 | --- | --- | --- |
 | D1 | Antenna source | ITU-R WP 5D 1 710-4 990 MHz AAS table. |
-| D2 | Deployment geometry | No 2.7 GHz deployment table. Inherit the existing defaults. |
+| D2 | Deployment geometry | BS height and cell radius from the ITU 2-3 GHz deployment table. All other deployment fields inherited. |
 | D3 | Power and bandwidth | Part 27 limit, 65 dBm/MHz EIRP, over a 100 MHz channel (2700-2800 MHz). |
 | D4 | Duplex and frequency | TDD; `frequencyMHz = 2750`. |
 
@@ -117,15 +119,35 @@ correct at 2.7 GHz.
 
 ## Deployment
 
-No 2.7 GHz deployment table is added. The runner still needs a BS height,
-cell radius, and minimum UE distance to sample UE directions, so the band
-option inherits the existing `r23DefaultParams(environment)` deployment
-block unchanged (urban: 18 m, 400 m; suburban: 20 m, 800 m). Metadata
-records this as `deploymentSource = 'inherited (no 2.7 GHz deployment)'`.
+Source: ITU-R WP 5D, Document 5D/716, Annex 4.4, table "Deployment-related
+parameters for bands between 1 and 3 GHz," urban/suburban macro column,
+rows for bands between 2 and 3 GHz (values drawn from Report ITU-R M.2292).
+The values were read from ECC Report 348 (Annex 1, Table 6), which
+reproduces the table. Confirm them against your copy of 5D/716.
 
-These values set the UE elevation angles, which shape the EIRP CDF near the
-horizon. A later deployment table can be added as an override without
-changing the band option.
+| Field | 2.7 GHz urban | 2.7 GHz suburban | 7 GHz urban (current) | 7 GHz suburban (current) |
+| --- | --- | --- | --- | --- |
+| `deployment.bsHeight_m` | **20** | **25** | 18 | 20 |
+| `deployment.cellRadius_m` | **400** | **800** | 400 | 800 |
+| `deployment.interSiteDistance_m` (derived, sqrt(3) x radius) | 693 | 1 386 | 693 | 1 386 |
+
+Only BS height and cell radius change. The runner uses just these two
+deployment fields to sample UE directions (`runR23AasEirpCdfGrid.m`, lines
+982-983), so they are the only deployment values that affect the EIRP
+result. Cell radius matches the 7 GHz values, so the change at 2.7 GHz is
+the taller BS: 2 m higher urban and 5 m higher suburban, which steers UE
+beams slightly further below the horizon.
+
+Everything else in the deployment block is inherited unchanged from
+`r23DefaultParams(environment)`, including `minUeDistance_m = 35`,
+`sectorHalfWidthDeg = 60`, and three sectors. BS density and below-rooftop
+share are metadata only in this code; they stay at the inherited values and
+aren't pulled from the ITU table. Metadata records
+`deploymentSource = 'ITU 5D/716 Annex 4.4, 2-3 GHz macro (height, radius)'`.
+
+For reference, the same ITU table lists below-rooftop deployment of 50%
+urban and 0% suburban for 2-3 GHz, and a 75% TDD activity factor, which
+matches the inherited value.
 
 ## Design
 
@@ -162,7 +184,7 @@ from different bands is allowed but stamped in
 
 | File | Purpose |
 | --- | --- |
-| `matlab/imtBandDefaultParams.m` | `params = imtBandDefaultParams(band, environment)`. For `'7ghz'`, returns `r23DefaultParams(environment)` unchanged. For `'2p7ghz'`, starts from that struct and overrides `bs.*` (power, frequency), `aas.*` (4 x 8 table), and `metadata.*`. Leaves `deployment.*` untouched. |
+| `matlab/imtBandDefaultParams.m` | `params = imtBandDefaultParams(band, environment)`. For `'7ghz'`, returns `r23DefaultParams(environment)` unchanged. For `'2p7ghz'`, starts from that struct and overrides `bs.*` (power, frequency), `aas.*` (4 x 8 table), `deployment.bsHeight_m` and `deployment.cellRadius_m` (and the derived inter-site distance), and `metadata.*`. Leaves every other `deployment.*` field untouched. |
 | `matlab/test_imtBandDefaultParams.m` | Field values, the 58.78 + 26.22 = 85.0 identity, and `isequal` with `r23DefaultParams` for `'7ghz'`. |
 | `matlab/test_runR23AasEirpCdfGrid_band2p7.m` | Runner-level invariants. See [Acceptance tests](#acceptance-tests). |
 | `matlab/test_band2p7_phased_crosscheck.m` | Optional independent pattern check. Skips cleanly without Phased Array System Toolbox. |
@@ -250,7 +272,8 @@ Each phase follows the MATLAB execution rule in `CLAUDE.md`: run
    histogram count totals, CDF endpoints, seed reproducibility, and chunked
    versus unchunked equality.
 7. **Metadata.** `metadata.band`, `frequencyMHz = 2750`, the geometry preset
-   name, `powerBasis`, and `deploymentSource` report the 2.7 GHz values.
+   name, `powerBasis`, `deploymentSource`, and `bsHeight_m` (20 urban,
+   25 suburban) and `cellRadius_m` (400, 800) report the 2.7 GHz values.
 8. **Independent pattern check (optional).** A Phased Array System Toolbox
    model of the same 4 x 8 array with 3-element sub-arrays agrees with
    `imtAasCompositeGain` on the main lobe and first sidelobes for three
@@ -266,9 +289,10 @@ grid, bin edges, and percentile list as `rev_num = 33`:
 
 | `rev_num` | Configuration | Purpose |
 | --- | --- | --- |
-| 34 | `band = '2p7ghz'`, `outputDomain = 'both'`, pointing histogram on | 2.7 GHz baseline EIRP and gain heatmaps at 85.0 dBm |
-| 35 | Same, with `opts.subband` on | Narrowband density; checks the 65 dBm/MHz ceiling |
-| 36 | Same as 34, with `sectorEirpDbm = 72.28` and `conductedPowerDbm = 46.06` | ITU-power sensitivity, to show the Part 27 versus ITU difference |
+| 34 | `band = '2p7ghz'`, urban, `outputDomain = 'both'`, pointing histogram on | 2.7 GHz baseline EIRP and gain heatmaps at 85.0 dBm |
+| 35 | Same, suburban | Deployment sensitivity (25 m, 0.8 km) |
+| 36 | Same as 34, with `opts.subband` on | Narrowband density; checks the 65 dBm/MHz ceiling |
+| 37 | Same as 34, with `sectorEirpDbm = 72.28` and `conductedPowerDbm = 46.06` | ITU-power sensitivity, to show the Part 27 versus ITU difference |
 
 The script's plot code uses fixed axis and color limits in places. Check
 them against the 2.7 GHz EIRP range when the first run completes.
@@ -297,8 +321,9 @@ These points are about using the output, not about the code change:
 
 Unchanged from `CLAUDE.md`: path loss, clutter, frequency-dependent
 rejection, receiver I/N, victim antennas, multi-site aggregation, and
-out-of-band or spurious emissions. Also out of scope: a 2.7 GHz deployment
-table, and the single-sector MVP and snake_case Monte Carlo API families.
+out-of-band or spurious emissions. Also out of scope: deployment fields
+other than BS height and cell radius, and the single-sector MVP and
+snake_case Monte Carlo API families.
 
 ## Risks
 
@@ -306,7 +331,7 @@ table, and the single-sector MVP and snake_case Monte Carlo API families.
 | --- | --- |
 | The 65 dBm figure is misread (per MHz versus per sector). | Confirm in phase 0; stamp `powerBasis` in metadata; acceptance test 4 checks the per-MHz ceiling directly. |
 | Part 27 power on an ITU-sized panel is a mixed assumption: the ITU panel was sized for 72.28 dBm, so reaching 85.0 dBm takes 12.7 dB more conducted power per sub-array. | State it in metadata and the README; keep run 36 as the ITU-power comparison. |
-| Inherited 7 GHz deployment geometry shapes the near-horizon CDF. | Stamp `deploymentSource`; allow a later override. |
+| The ITU 2-3 GHz deployment values are generic IMT sharing-study values, not US 2.7 GHz deployments. | Stamp `deploymentSource`; `bsHeight_m` and `cellRadius_m` stay overridable. |
 | A hidden 7 GHz constant leaks into a 2.7 GHz result. | The audit above, plus a test that runs every optional layer with `band = '2p7ghz'` and checks no power-conserving output exceeds 85.0 dBm. |
 | A 7 GHz regression. | Byte-identical tests and the three existing goldens. |
 
@@ -324,6 +349,12 @@ table, and the single-sector MVP and snake_case Monte Carlo API families.
 - ITU-R WP 5D, Document 5D/TEMP/628(Rev.2), Table 5 (public copy used to
   read the 1 710-4 990 MHz values):
   <https://iafi.in/system/libraries/static/uploads/contribution/File-%201229.pdf>
+- ECC Report 348, *Usage of aerial UE in 1.8 GHz, 2 GHz and 2.6 GHz
+  frequency bands with MFCN AAS base stations* (2022), Annex 1, Table 6
+  (public copy used to read the 2-3 GHz deployment values):
+  <https://docdb.cept.org/download/4169>
+- Report ITU-R M.2292-0, *Characteristics of terrestrial IMT-Advanced
+  systems for frequency sharing/interference analyses*.
 - 47 CFR 27.50 and 24.232 (per-MHz base-station EIRP limits, 1640 and
   3280 W/MHz).
 - Recommendation ITU-R M.2101-0, Annex 1, section 5.
